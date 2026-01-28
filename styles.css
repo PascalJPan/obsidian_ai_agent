@@ -1,13 +1,604 @@
 /*
+ * AI Assistant Plugin Styles
+ */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+/* ===================================
+   AI Assistant Sidebar View - Chat Layout
+   =================================== */
 
-If your plugin does not need CSS, delete this file.
+.ai-assistant-view {
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+}
 
-*/
+/* Chat container - takes up available space */
+.ai-chat-container {
+	flex: 1;
+	overflow-y: auto;
+	padding: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	user-select: text;
+	-webkit-user-select: text;
+	background: var(--background-primary);
+}
 
-/* Edit Preview Modal Styles */
+.ai-chat-welcome {
+	color: var(--text-muted);
+	text-align: center;
+	padding: 40px 20px;
+	font-style: italic;
+}
+
+/* Chat messages */
+.ai-chat-message {
+	display: flex;
+	max-width: 85%;
+}
+
+.ai-chat-message-user {
+	align-self: flex-end;
+	flex-direction: row-reverse;
+}
+
+.ai-chat-message-assistant {
+	align-self: flex-start;
+}
+
+.ai-chat-bubble {
+	padding: 10px 14px;
+	border-radius: 16px;
+	word-wrap: break-word;
+	overflow-wrap: break-word;
+	user-select: text;
+	-webkit-user-select: text;
+	cursor: text;
+}
+
+.ai-chat-message-user .ai-chat-bubble {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-bottom-right-radius: 4px;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble {
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	border-bottom-left-radius: 4px;
+}
+
+/* Markdown in assistant messages */
+.ai-chat-message-assistant .ai-chat-bubble p {
+	margin: 0 0 8px 0;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble p:last-child {
+	margin-bottom: 0;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble ul,
+.ai-chat-message-assistant .ai-chat-bubble ol {
+	margin: 8px 0;
+	padding-left: 20px;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble li {
+	margin: 4px 0;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble code {
+	background: var(--background-primary);
+	padding: 2px 4px;
+	border-radius: 3px;
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble pre {
+	margin: 8px 0;
+	background: var(--background-primary);
+	padding: 8px;
+	border-radius: 4px;
+	overflow-x: auto;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble pre code {
+	background: none;
+	padding: 0;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble strong {
+	font-weight: 600;
+}
+
+.ai-chat-message-assistant .ai-chat-bubble blockquote {
+	margin: 8px 0;
+	padding-left: 12px;
+	border-left: 3px solid var(--interactive-accent);
+	color: var(--text-muted);
+}
+
+/* Loading indicator */
+.ai-chat-loading .ai-chat-bubble {
+	padding: 10px 20px;
+}
+
+.ai-chat-loading-dots {
+	display: inline-block;
+	animation: loadingDots 1.4s infinite;
+}
+
+@keyframes loadingDots {
+	0%, 20% { opacity: 0.3; }
+	50% { opacity: 1; }
+	80%, 100% { opacity: 0.3; }
+}
+
+/* Bottom section - fixed at bottom */
+.ai-assistant-bottom-section {
+	flex-shrink: 0;
+	padding: 12px;
+	margin: 8px;
+	margin-top: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	background: var(--background-secondary);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+/* Input row with textarea and submit button */
+.ai-assistant-input-row {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+}
+
+.ai-assistant-input-row .ai-assistant-textarea {
+	flex: 1;
+	min-height: 36px;
+	max-height: 120px;
+	resize: none;
+	padding: 8px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 18px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 0.95em;
+	font-family: inherit;
+	line-height: 1.4;
+}
+
+.ai-assistant-input-row .ai-assistant-textarea:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.ai-assistant-input-row .ai-assistant-textarea::placeholder {
+	color: var(--text-muted);
+}
+
+.ai-assistant-input-row .ai-assistant-textarea:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+/* Submit arrow button */
+.ai-assistant-submit-arrow {
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 1.1em;
+	flex-shrink: 0;
+	transition: background-color 0.15s ease;
+}
+
+.ai-assistant-submit-arrow:hover {
+	background: var(--interactive-accent-hover);
+}
+
+.ai-assistant-submit-arrow:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.ai-assistant-submit-arrow.is-loading {
+	animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+	0%, 100% { opacity: 0.6; }
+	50% { opacity: 1; }
+}
+
+/* Inline refresh button */
+.ai-assistant-refresh-inline {
+	background: none;
+	border: none;
+	padding: 2px 6px;
+	cursor: pointer;
+	font-size: 0.9em;
+	color: var(--text-muted);
+	border-radius: 4px;
+	margin-left: 4px;
+}
+
+.ai-assistant-refresh-inline:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+/* Collapsible toggles */
+.ai-assistant-toggle {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.ai-assistant-toggle summary {
+	padding: 8px 10px;
+	cursor: pointer;
+	font-weight: 500;
+	font-size: 0.85em;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	user-select: none;
+}
+
+.ai-assistant-toggle summary:hover {
+	background: var(--background-modifier-hover);
+}
+
+.ai-assistant-toggle summary::marker,
+.ai-assistant-toggle summary::-webkit-details-marker {
+	display: none;
+}
+
+.ai-assistant-toggle summary::before {
+	content: '\25B6';
+	font-size: 0.7em;
+	transition: transform 0.2s ease;
+}
+
+.ai-assistant-toggle[open] summary::before {
+	transform: rotate(90deg);
+}
+
+.ai-assistant-toggle-content {
+	padding: 10px 12px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-assistant-context-info {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	font-weight: normal;
+}
+
+/* Radio groups */
+.ai-assistant-radio-group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ai-assistant-radio-group-inline {
+	display: flex;
+	flex-direction: row;
+	gap: 16px;
+}
+
+.ai-assistant-radio-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	font-size: 0.9em;
+}
+
+.ai-assistant-radio-label input[type="radio"] {
+	margin: 0;
+}
+
+/* Checkboxes */
+.ai-assistant-checkboxes {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ai-assistant-checkbox-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	font-size: 0.9em;
+}
+
+.ai-assistant-checkbox-label input[type="checkbox"] {
+	margin: 0;
+}
+
+/* Section labels */
+.ai-assistant-section-label {
+	font-weight: 500;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	margin-bottom: 6px;
+	margin-top: 8px;
+}
+
+.ai-assistant-section-label:first-child {
+	margin-top: 0;
+}
+
+/* Mode section */
+.ai-assistant-mode-section {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.9em;
+}
+
+/* ===================================
+   Inline Edit Widgets
+   =================================== */
+
+.ai-edit-widget {
+	border: 2px solid var(--interactive-accent);
+	border-radius: 8px;
+	padding: 12px;
+	margin: 12px 0;
+	background: var(--background-primary);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.ai-edit-type-badge {
+	font-size: 0.8em;
+	font-weight: 600;
+	padding: 2px 8px;
+	border-radius: 4px;
+	display: inline-block;
+	margin-bottom: 10px;
+}
+
+.ai-edit-badge-add {
+	background: rgba(100, 255, 100, 0.2);
+	color: var(--text-success, #4ade80);
+}
+
+.ai-edit-badge-delete {
+	background: rgba(255, 100, 100, 0.2);
+	color: var(--text-error);
+}
+
+.ai-edit-badge-replace {
+	background: rgba(100, 180, 255, 0.2);
+	color: var(--text-accent);
+}
+
+.ai-edit-label {
+	font-size: 0.8em;
+	font-weight: 500;
+	color: var(--text-muted);
+	display: block;
+	margin-bottom: 4px;
+}
+
+.ai-edit-before {
+	background: rgba(255, 100, 100, 0.15);
+	border-left: 3px solid var(--text-error);
+	padding: 8px 12px;
+	border-radius: 4px;
+	margin-bottom: 8px;
+}
+
+.ai-edit-before .ai-edit-content {
+	text-decoration: line-through;
+	opacity: 0.8;
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+	white-space: pre-wrap;
+}
+
+.ai-edit-after {
+	background: rgba(100, 255, 100, 0.15);
+	border-left: 3px solid var(--text-success, #4ade80);
+	padding: 8px 12px;
+	border-radius: 4px;
+	margin-bottom: 8px;
+}
+
+.ai-edit-after .ai-edit-content {
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+	white-space: pre-wrap;
+}
+
+.ai-edit-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-edit-reject {
+	background: rgba(255, 100, 100, 0.2);
+	color: var(--text-error);
+	border: 1px solid var(--text-error);
+	padding: 6px 16px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-weight: 500;
+}
+
+.ai-edit-reject:hover {
+	background: rgba(255, 100, 100, 0.35);
+}
+
+.ai-edit-accept {
+	background: rgba(100, 255, 100, 0.2);
+	color: var(--text-success, #4ade80);
+	border: 1px solid var(--text-success, #4ade80);
+	padding: 6px 16px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-weight: 500;
+}
+
+.ai-edit-accept:hover {
+	background: rgba(100, 255, 100, 0.35);
+}
+
+.ai-edit-error {
+	color: var(--text-error);
+	padding: 8px;
+	font-style: italic;
+}
+
+/* ===================================
+   AI-Created Note Widget
+   =================================== */
+
+.ai-new-note-widget {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	border: 2px solid var(--interactive-accent);
+	border-radius: 8px;
+	padding: 10px 14px;
+	margin: 12px 0;
+	background: var(--background-primary);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.ai-new-note-message {
+	font-size: 0.9em;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.ai-new-note-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.ai-new-note-reject {
+	background: rgba(255, 100, 100, 0.2);
+	color: var(--text-error);
+	border: 1px solid var(--text-error);
+	width: 32px;
+	height: 32px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 1.1em;
+	font-weight: bold;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.ai-new-note-reject:hover {
+	background: rgba(255, 100, 100, 0.35);
+}
+
+.ai-new-note-accept {
+	background: rgba(100, 255, 100, 0.2);
+	color: var(--text-success, #4ade80);
+	border: 1px solid var(--text-success, #4ade80);
+	width: 32px;
+	height: 32px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 1.1em;
+	font-weight: bold;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.ai-new-note-accept:hover {
+	background: rgba(100, 255, 100, 0.35);
+}
+
+/* ===================================
+   Pending Edits Modal
+   =================================== */
+
+.pending-edits-modal {
+	padding: 20px;
+	max-width: 500px;
+}
+
+.pending-edits-modal h2 {
+	margin-top: 0;
+	margin-bottom: 12px;
+}
+
+.pending-edits-modal p {
+	color: var(--text-muted);
+	margin-bottom: 16px;
+}
+
+.pending-edits-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 20px;
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+.pending-edits-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+}
+
+.pending-edits-item a {
+	color: var(--text-accent);
+	cursor: pointer;
+	text-decoration: none;
+}
+
+.pending-edits-item a:hover {
+	text-decoration: underline;
+}
+
+.pending-edits-count {
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+.pending-edits-buttons {
+	display: flex;
+	justify-content: flex-end;
+	padding-top: 12px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* ===================================
+   Edit Preview Modal (kept for batch preview)
+   =================================== */
+
 .edit-preview-modal {
 	padding: 20px;
 	max-height: 80vh;
@@ -125,24 +716,6 @@ If your plugin does not need CSS, delete this file.
 	pointer-events: auto;
 }
 
-.edit-preview-modal button.is-loading {
-	position: relative;
-}
-
-.edit-preview-modal button.is-loading::after {
-	content: '';
-	position: absolute;
-	right: 8px;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 12px;
-	height: 12px;
-	border: 2px solid transparent;
-	border-top-color: currentColor;
-	border-radius: 50%;
-	animation: spin 0.8s linear infinite;
-}
-
 /* Error container for EditPreviewModal */
 .edit-preview-error-container {
 	margin-bottom: 16px;
@@ -162,7 +735,10 @@ If your plugin does not need CSS, delete this file.
 	color: var(--text-on-accent);
 }
 
-/* Diff Preview Styles */
+/* ===================================
+   Diff Preview Styles
+   =================================== */
+
 .edit-preview-diff {
 	font-family: var(--font-monospace);
 	font-size: 0.85em;
@@ -234,196 +810,10 @@ If your plugin does not need CSS, delete this file.
 	padding-left: 8px;
 }
 
-/* Task Modal Styles */
-.task-modal {
-	padding: 20px;
-	min-width: 450px;
-	max-width: 600px;
-}
+/* ===================================
+   Spinner Animation
+   =================================== */
 
-.task-modal h2 {
-	margin-top: 0;
-	margin-bottom: 16px;
-}
-
-.task-modal-section {
-	margin-bottom: 16px;
-}
-
-.task-modal-section > label {
-	display: block;
-	font-weight: 500;
-	margin-bottom: 6px;
-	color: var(--text-normal);
-}
-
-.task-modal-dropdown {
-	width: 100%;
-	padding: 8px 12px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-primary);
-	color: var(--text-normal);
-	font-size: 0.95em;
-}
-
-.task-modal-dropdown:focus {
-	outline: none;
-	border-color: var(--interactive-accent);
-}
-
-.task-modal-checkboxes {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 8px 0;
-}
-
-.task-modal-checkbox-label {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	cursor: pointer;
-	font-size: 0.95em;
-}
-
-.task-modal-checkbox-label input[type="checkbox"] {
-	margin: 0;
-}
-
-.task-modal-textarea {
-	width: 100%;
-	padding: 10px 12px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-primary);
-	color: var(--text-normal);
-	font-size: 0.95em;
-	resize: vertical;
-	min-height: 100px;
-}
-
-.task-modal-textarea:focus {
-	outline: none;
-	border-color: var(--interactive-accent);
-}
-
-.task-modal-textarea::placeholder {
-	color: var(--text-muted);
-}
-
-.task-modal-token-estimate {
-	padding: 10px;
-	background: var(--background-secondary);
-	border-radius: 6px;
-	font-size: 0.9em;
-	color: var(--text-muted);
-	margin-bottom: 16px;
-}
-
-.task-modal-token-estimate.warning {
-	background: rgba(255, 200, 100, 0.2);
-	border: 1px solid var(--text-warning, #f59e0b);
-}
-
-.task-modal-token-estimate.warning .token-warning-text {
-	color: var(--text-warning, #f59e0b);
-	font-weight: 500;
-}
-
-.task-modal-buttons {
-	display: flex;
-	justify-content: flex-end;
-	gap: 10px;
-	padding-top: 16px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-/* Loading state for TaskModal */
-.task-modal.is-loading {
-	opacity: 0.7;
-}
-
-.task-modal.is-loading .task-modal-buttons {
-	pointer-events: auto;
-	opacity: 1;
-}
-
-.task-modal.is-loading .task-modal-section {
-	pointer-events: none;
-}
-
-/* Task Modal Spinner */
-.task-modal-spinner {
-	display: flex;
-	justify-content: center;
-	align-items: center;
-	padding: 20px;
-}
-
-.task-modal-spinner::after {
-	content: '';
-	width: 24px;
-	height: 24px;
-	border: 3px solid var(--background-modifier-border);
-	border-top-color: var(--interactive-accent);
-	border-radius: 50%;
-	animation: spin 0.8s linear infinite;
-}
-
-/* Error container for TaskModal */
-.task-modal-error-container {
-	margin-bottom: 16px;
-	padding: 12px;
-	background: var(--background-modifier-error);
-	border: 1px solid var(--text-error);
-	border-radius: 6px;
-}
-
-.task-modal-error-message {
-	color: var(--text-error);
-	margin-bottom: 10px;
-}
-
-.task-modal-retry-btn {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
-}
-
-/* Confirmation Modal Styles */
-.confirmation-modal {
-	padding: 20px;
-	max-width: 400px;
-}
-
-.confirmation-modal h3 {
-	margin-top: 0;
-	margin-bottom: 12px;
-	color: var(--text-warning, #f59e0b);
-}
-
-.confirmation-modal p {
-	margin-bottom: 20px;
-	color: var(--text-normal);
-	line-height: 1.5;
-}
-
-.confirmation-modal-buttons {
-	display: flex;
-	justify-content: flex-end;
-	gap: 10px;
-}
-
-.confirmation-modal-buttons button.mod-warning {
-	background: var(--text-warning, #f59e0b);
-	color: white;
-}
-
-.confirmation-modal-buttons button.mod-warning:hover {
-	background: var(--text-warning, #d97706);
-}
-
-/* Spinner Animation */
 @keyframes spin {
 	0% {
 		transform: rotate(0deg);
@@ -433,15 +823,62 @@ If your plugin does not need CSS, delete this file.
 	}
 }
 
-/* Disabled states */
-.task-modal-dropdown:disabled,
-.task-modal-textarea:disabled,
-.task-modal-checkbox-label input[type="checkbox"]:disabled {
-	opacity: 0.6;
-	cursor: not-allowed;
-}
+/* ===================================
+   Disabled States
+   =================================== */
 
 button:disabled {
 	opacity: 0.6;
 	cursor: not-allowed;
+}
+
+/* ===================================
+   Excluded Folders Settings
+   =================================== */
+
+.excluded-folders-list {
+	margin-bottom: 16px;
+}
+
+.excluded-folders-empty {
+	color: var(--text-muted);
+	font-style: italic;
+	padding: 8px 0;
+}
+
+.excluded-folder-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 12px;
+	margin-bottom: 6px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+}
+
+.excluded-folder-path {
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+}
+
+.excluded-folder-remove {
+	background: rgba(255, 100, 100, 0.15);
+	color: var(--text-error);
+	border: 1px solid var(--text-error);
+	padding: 4px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 0.85em;
+}
+
+.excluded-folder-remove:hover {
+	background: rgba(255, 100, 100, 0.3);
+}
+
+/* Restricted count in context summary */
+.ai-assistant-context-info {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	font-weight: normal;
 }
