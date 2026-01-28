@@ -6,3 +6,442 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+/* Edit Preview Modal Styles */
+.edit-preview-modal {
+	padding: 20px;
+	max-height: 80vh;
+	overflow-y: auto;
+}
+
+.edit-preview-modal h2 {
+	margin-top: 0;
+	margin-bottom: 16px;
+}
+
+.edit-preview-summary {
+	margin-bottom: 12px;
+	padding: 10px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+}
+
+.edit-preview-count {
+	margin-bottom: 16px;
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+.edit-preview-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-bottom: 20px;
+}
+
+.edit-preview-item {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 12px;
+	background: var(--background-primary);
+}
+
+.edit-preview-item.edit-preview-error {
+	border-color: var(--text-error);
+	background: var(--background-modifier-error);
+	opacity: 0.8;
+}
+
+.edit-preview-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 8px;
+}
+
+.edit-preview-header input[type="checkbox"] {
+	margin: 0;
+}
+
+.edit-preview-filename {
+	font-weight: 600;
+	flex: 1;
+}
+
+.edit-preview-position {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+}
+
+.edit-preview-new-badge {
+	font-size: 0.75em;
+	font-weight: 600;
+	color: var(--text-on-accent);
+	background: var(--interactive-accent);
+	padding: 2px 6px;
+	border-radius: 4px;
+	margin-left: 8px;
+}
+
+.edit-preview-error-msg {
+	color: var(--text-error);
+	font-size: 0.9em;
+	margin-bottom: 8px;
+	padding: 6px;
+	background: var(--background-modifier-error);
+	border-radius: 4px;
+}
+
+.edit-preview-content {
+	background: var(--background-secondary);
+	border-radius: 4px;
+	padding: 8px;
+	overflow-x: auto;
+}
+
+.edit-preview-content pre {
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 0.85em;
+}
+
+.edit-preview-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Loading state for EditPreviewModal */
+.edit-preview-modal.is-loading {
+	opacity: 0.7;
+	pointer-events: none;
+}
+
+.edit-preview-modal.is-loading .edit-preview-buttons {
+	pointer-events: auto;
+}
+
+.edit-preview-modal button.is-loading {
+	position: relative;
+}
+
+.edit-preview-modal button.is-loading::after {
+	content: '';
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 12px;
+	height: 12px;
+	border: 2px solid transparent;
+	border-top-color: currentColor;
+	border-radius: 50%;
+	animation: spin 0.8s linear infinite;
+}
+
+/* Error container for EditPreviewModal */
+.edit-preview-error-container {
+	margin-bottom: 16px;
+	padding: 12px;
+	background: var(--background-modifier-error);
+	border: 1px solid var(--text-error);
+	border-radius: 6px;
+}
+
+.edit-preview-error-message {
+	color: var(--text-error);
+	margin-bottom: 10px;
+}
+
+.edit-preview-retry-btn {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+/* Diff Preview Styles */
+.edit-preview-diff {
+	font-family: var(--font-monospace);
+	font-size: 0.85em;
+	background: var(--background-secondary);
+	border-radius: 4px;
+	padding: 8px;
+	overflow-x: auto;
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+.diff-line {
+	display: flex;
+	line-height: 1.5;
+	padding: 1px 4px;
+	border-radius: 2px;
+}
+
+.diff-line-number {
+	min-width: 40px;
+	text-align: right;
+	padding-right: 8px;
+	color: var(--text-muted);
+	user-select: none;
+}
+
+.diff-line-content {
+	flex: 1;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.diff-removed {
+	background: rgba(255, 100, 100, 0.2);
+}
+
+.diff-removed .diff-line-content {
+	color: var(--text-error);
+}
+
+.diff-added {
+	background: rgba(100, 255, 100, 0.2);
+}
+
+.diff-added .diff-line-content {
+	color: var(--text-success, #4ade80);
+}
+
+.diff-unchanged {
+	background: transparent;
+}
+
+.diff-unchanged .diff-line-content {
+	color: var(--text-muted);
+}
+
+.diff-more {
+	text-align: center;
+	color: var(--text-muted);
+	font-style: italic;
+	padding: 8px;
+	border-top: 1px dashed var(--background-modifier-border);
+	margin-top: 8px;
+}
+
+.diff-added-block {
+	background: rgba(100, 255, 100, 0.15);
+	border-left: 3px solid var(--text-success, #4ade80);
+	padding-left: 8px;
+}
+
+/* Task Modal Styles */
+.task-modal {
+	padding: 20px;
+	min-width: 450px;
+	max-width: 600px;
+}
+
+.task-modal h2 {
+	margin-top: 0;
+	margin-bottom: 16px;
+}
+
+.task-modal-section {
+	margin-bottom: 16px;
+}
+
+.task-modal-section > label {
+	display: block;
+	font-weight: 500;
+	margin-bottom: 6px;
+	color: var(--text-normal);
+}
+
+.task-modal-dropdown {
+	width: 100%;
+	padding: 8px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 0.95em;
+}
+
+.task-modal-dropdown:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.task-modal-checkboxes {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 8px 0;
+}
+
+.task-modal-checkbox-label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	font-size: 0.95em;
+}
+
+.task-modal-checkbox-label input[type="checkbox"] {
+	margin: 0;
+}
+
+.task-modal-textarea {
+	width: 100%;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 0.95em;
+	resize: vertical;
+	min-height: 100px;
+}
+
+.task-modal-textarea:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.task-modal-textarea::placeholder {
+	color: var(--text-muted);
+}
+
+.task-modal-token-estimate {
+	padding: 10px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+	font-size: 0.9em;
+	color: var(--text-muted);
+	margin-bottom: 16px;
+}
+
+.task-modal-token-estimate.warning {
+	background: rgba(255, 200, 100, 0.2);
+	border: 1px solid var(--text-warning, #f59e0b);
+}
+
+.task-modal-token-estimate.warning .token-warning-text {
+	color: var(--text-warning, #f59e0b);
+	font-weight: 500;
+}
+
+.task-modal-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* Loading state for TaskModal */
+.task-modal.is-loading {
+	opacity: 0.7;
+}
+
+.task-modal.is-loading .task-modal-buttons {
+	pointer-events: auto;
+	opacity: 1;
+}
+
+.task-modal.is-loading .task-modal-section {
+	pointer-events: none;
+}
+
+/* Task Modal Spinner */
+.task-modal-spinner {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	padding: 20px;
+}
+
+.task-modal-spinner::after {
+	content: '';
+	width: 24px;
+	height: 24px;
+	border: 3px solid var(--background-modifier-border);
+	border-top-color: var(--interactive-accent);
+	border-radius: 50%;
+	animation: spin 0.8s linear infinite;
+}
+
+/* Error container for TaskModal */
+.task-modal-error-container {
+	margin-bottom: 16px;
+	padding: 12px;
+	background: var(--background-modifier-error);
+	border: 1px solid var(--text-error);
+	border-radius: 6px;
+}
+
+.task-modal-error-message {
+	color: var(--text-error);
+	margin-bottom: 10px;
+}
+
+.task-modal-retry-btn {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+/* Confirmation Modal Styles */
+.confirmation-modal {
+	padding: 20px;
+	max-width: 400px;
+}
+
+.confirmation-modal h3 {
+	margin-top: 0;
+	margin-bottom: 12px;
+	color: var(--text-warning, #f59e0b);
+}
+
+.confirmation-modal p {
+	margin-bottom: 20px;
+	color: var(--text-normal);
+	line-height: 1.5;
+}
+
+.confirmation-modal-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+}
+
+.confirmation-modal-buttons button.mod-warning {
+	background: var(--text-warning, #f59e0b);
+	color: white;
+}
+
+.confirmation-modal-buttons button.mod-warning:hover {
+	background: var(--text-warning, #d97706);
+}
+
+/* Spinner Animation */
+@keyframes spin {
+	0% {
+		transform: rotate(0deg);
+	}
+	100% {
+		transform: rotate(360deg);
+	}
+}
+
+/* Disabled states */
+.task-modal-dropdown:disabled,
+.task-modal-textarea:disabled,
+.task-modal-checkbox-label input[type="checkbox"]:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+button:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
