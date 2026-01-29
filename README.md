@@ -27,11 +27,23 @@ Think of it as a collaborator that:
 - Control which notes the AI can edit
 - Toggle capabilities: add content, delete/replace, create new notes
 - Exclude sensitive folders entirely
+- **Hard enforcement**: Rules are validated server-side, not just suggested to AI
+
+**Model Selection**
+- Choose your preferred OpenAI model (gpt-4o-mini, gpt-4o, gpt-4-turbo, o1, etc.)
+- Balance cost, speed, and capability for your workflow
+
+**Conversation Memory**
+- AI remembers previous messages in your session
+- Knows what edits it proposed and what succeeded/failed
+- Can refine or fix previous attempts based on feedback
+- Configurable history length (0-100 messages)
 
 **Review Before Commit**
 - Every proposed edit appears as a reviewable block in your note
 - Accept or reject each change individually
 - Batch accept/reject all pending edits
+- AI can modify its own pending edits if you ask
 
 ## How It Works
 
@@ -47,8 +59,10 @@ That's it. You stay in control.
 
 1. Install the plugin
 2. Add your OpenAI API key in settings
-3. Open a note and click the brain icon
-4. Start asking questions or requesting edits
+3. (Optional) Choose your preferred AI model
+4. (Optional) Adjust chat history length for conversation memory
+5. Open a note and click the brain icon
+6. Start asking questions or requesting edits
 
 ## Philosophy
 
