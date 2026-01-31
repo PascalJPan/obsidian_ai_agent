@@ -115,7 +115,7 @@ Note: When deleting all content, you can delete lines 1-N where N is the last li
 ## Creating new files:
 - "create" - Create a new file (specify full path with .md extension in "file" field)
   Example: { "file": "Projects/New Project.md", "position": "create", "content": "# New Project\\n\\nProject description here" }
-  Note: Parent folders will be created automatically if they don't exist.`;
+  Note: Parent folders will be created automatically if they don't exist. Also make sure to link to other notes if it makes sense via obsidian linkes [[]]. Generally I expect this.`;
 	}
 
 	return positionTypes;

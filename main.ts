@@ -27,7 +27,8 @@ import {
 	ValidatedEdit,
 	DiffLine,
 	InlineEdit,
-	ChatMessage
+	ChatMessage,
+	TokenUsage
 } from './src/types';
 import {
 	CORE_QA_PROMPT,
@@ -40,6 +41,7 @@ import {
 import { addLineNumbers } from './src/ai/context';
 import { escapeRegex, determineEditType, computeNewContent } from './src/ai/validation';
 import { computeDiff, longestCommonSubsequence } from './src/edits/diff';
+import { formatTokenUsage } from './src/ai/pricing';
 
 // View type constant
 const AI_ASSISTANT_VIEW_TYPE = 'ai-assistant-view';
@@ -56,6 +58,8 @@ interface MyPluginSettings {
 	excludedFolders: string[];
 	chatHistoryLength: number;      // Number of previous messages to include (0-100)
 	debugMode: boolean;             // Log prompts and responses to console
+	clearChatOnNoteSwitch: boolean; // Clear chat history when switching notes
+	showTokenUsage: boolean;        // Show token count and cost estimate in chat
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -68,7 +72,9 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	pendingEditTag: '#ai_edit',
 	excludedFolders: [],
 	chatHistoryLength: 10,
-	debugMode: false
+	debugMode: false,
+	clearChatOnNoteSwitch: false,
+	showTokenUsage: false
 }
 
 // Type definitions now imported from src/types.ts
@@ -78,7 +84,10 @@ export default class MyPlugin extends Plugin {
 
 	debugLog(label: string, data: unknown) {
 		if (this.settings.debugMode) {
-			console.log(`[AI Assistant Debug] ${label}:`, data);
+			const formatted = typeof data === 'string'
+				? data
+				: JSON.stringify(data, null, 2);
+			console.log(`[AI Assistant Debug] ${label}:\n${formatted}`);
 		}
 	}
 
@@ -134,6 +143,19 @@ export default class MyPlugin extends Plugin {
 			id: 'search-pending-edits',
 			name: 'Search pending edits',
 			callback: () => this.openSearchWithQuery(this.settings.pendingEditTag)
+		});
+
+		// Single edit commands (for keyboard shortcuts)
+		this.addCommand({
+			id: 'accept-next-pending-edit',
+			name: 'Accept next pending edit in current note',
+			callback: () => this.processNextEdit('accept')
+		});
+
+		this.addCommand({
+			id: 'reject-next-pending-edit',
+			name: 'Reject next pending edit in current note',
+			callback: () => this.processNextEdit('reject')
 		});
 
 		// Settings tab
@@ -369,6 +391,26 @@ export default class MyPlugin extends Plugin {
 			await this.app.vault.modify(file, content);
 			new Notice('Note accepted');
 		}
+	}
+
+	// Process next pending edit in current file (for keyboard shortcuts)
+	async processNextEdit(action: 'accept' | 'reject') {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) {
+			new Notice('No active file');
+			return;
+		}
+
+		const content = await this.app.vault.read(file);
+		const edits = this.extractEditsFromContent(content);
+
+		if (edits.length === 0) {
+			new Notice('No pending edits in current note');
+			return;
+		}
+
+		// Process the first edit
+		await this.resolveEdit(file.path, edits[0], action);
 	}
 
 	// Batch process all pending edits
@@ -920,10 +962,14 @@ export default class MyPlugin extends Plugin {
 		try {
 			let jsonStr = responseText.trim();
 
-			const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-			if (codeBlockMatch) {
-				jsonStr = codeBlockMatch[1].trim();
-				this.debugLog('[PARSE] Extracted from code block', jsonStr);
+			// Only extract from code block if the response STARTS with backticks
+			// (meaning the whole response is wrapped, not just containing markdown with code blocks)
+			if (jsonStr.startsWith('```')) {
+				const codeBlockMatch = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
+				if (codeBlockMatch) {
+					jsonStr = codeBlockMatch[1].trim();
+					this.debugLog('[PARSE] Extracted from code block', jsonStr);
+				}
 			}
 
 			const parsed = JSON.parse(jsonStr);
@@ -1147,6 +1193,7 @@ class AIAssistantView extends ItemView {
 	taskText = '';
 	isLoading = false;
 	chatMessages: ChatMessage[] = [];
+	lastActiveFilePath: string | null = null;
 
 	// UI refs
 	private chatContainer: HTMLDivElement | null = null;
@@ -1289,10 +1336,10 @@ class AIAssistantView extends ItemView {
 
 		// Clear Chat button
 		const clearChatBtn = actionsBar.createEl('button', {
-			cls: 'ai-assistant-action-btn',
+			cls: 'ai-assistant-action-btn ai-assistant-action-btn-small',
 			attr: { 'aria-label': 'Clear chat history' }
 		});
-		setIcon(clearChatBtn, 'trash-2');
+		setIcon(clearChatBtn, 'eraser');
 		clearChatBtn.title = 'Clear chat history';
 		clearChatBtn.addEventListener('click', () => this.clearChat());
 
@@ -1302,9 +1349,29 @@ class AIAssistantView extends ItemView {
 		// Listen for active file changes
 		this.registerEvent(
 			this.app.workspace.on('active-leaf-change', () => {
-				this.updateContextSummary();
+				this.handleActiveFileChange();
 			})
 		);
+
+		// Listen for file renames to update context indicators
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (file instanceof TFile) {
+					this.updateContextIndicatorsForRename(oldPath, file.path, file.basename);
+					// Also update lastActiveFilePath if it was the renamed file
+					if (this.lastActiveFilePath === oldPath) {
+						this.lastActiveFilePath = file.path;
+					}
+				}
+			})
+		);
+
+		// Initialize last active file and show initial context
+		const initialFile = this.app.workspace.getActiveFile();
+		if (initialFile) {
+			this.lastActiveFilePath = initialFile.path;
+			this.showContextIndicator(initialFile.path, initialFile.basename);
+		}
 	}
 
 	autoResizeTextarea() {
@@ -1312,6 +1379,81 @@ class AIAssistantView extends ItemView {
 			this.taskTextarea.style.height = 'auto';
 			const newHeight = Math.min(this.taskTextarea.scrollHeight, 120);
 			this.taskTextarea.style.height = newHeight + 'px';
+		}
+	}
+
+	handleActiveFileChange() {
+		const currentFile = this.app.workspace.getActiveFile();
+		const currentPath = currentFile?.path || null;
+
+		// Check if file actually changed (not just leaf focus)
+		if (currentPath && currentPath !== this.lastActiveFilePath) {
+			const previousPath = this.lastActiveFilePath;
+			this.lastActiveFilePath = currentPath;
+
+			// Only act if we had a previous file and have chat messages
+			if (previousPath && this.chatMessages.length > 0) {
+				if (this.plugin.settings.clearChatOnNoteSwitch) {
+					this.clearChat();
+				} else {
+					this.showContextIndicator(currentPath, currentFile!.basename);
+				}
+			}
+		}
+
+		this.updateContextSummary();
+	}
+
+	showContextIndicator(filePath: string, noteName: string) {
+		if (!this.chatContainer) return;
+
+		// Check if the last message is already a context-switch - if so, update it
+		const lastMessage = this.chatMessages[this.chatMessages.length - 1];
+		if (lastMessage && lastMessage.type === 'context-switch') {
+			// Update existing context-switch message
+			lastMessage.content = noteName;
+			lastMessage.activeFile = filePath;
+			lastMessage.timestamp = new Date();
+
+			// Update the DOM element
+			const existingEl = this.chatContainer.querySelector(`[data-message-id="${lastMessage.id}"]`);
+			if (existingEl) {
+				const textSpan = existingEl.querySelector('.ai-chat-context-text');
+				if (textSpan) textSpan.setText(noteName);
+			}
+		} else {
+			// Add new context-switch message
+			const message: ChatMessage = {
+				id: this.generateMessageId(),
+				role: 'system',
+				type: 'context-switch',
+				content: noteName,
+				activeFile: filePath,
+				timestamp: new Date()
+			};
+			this.chatMessages.push(message);
+			this.renderMessage(message);
+		}
+
+		this.scrollChatToBottom();
+	}
+
+	// Update context indicators when a file is renamed
+	updateContextIndicatorsForRename(oldPath: string, newPath: string, newName: string) {
+		for (const message of this.chatMessages) {
+			if (message.type === 'context-switch' && message.activeFile === oldPath) {
+				message.activeFile = newPath;
+				message.content = newName;
+
+				// Update DOM if visible
+				if (this.chatContainer) {
+					const el = this.chatContainer.querySelector(`[data-message-id="${message.id}"]`);
+					if (el) {
+						const textSpan = el.querySelector('.ai-chat-context-text');
+						if (textSpan) textSpan.setText(newName);
+					}
+				}
+			}
 		}
 	}
 
@@ -1326,6 +1468,7 @@ class AIAssistantView extends ItemView {
 			activeFile?: string;
 			proposedEdits?: EditInstruction[];
 			editResults?: { success: number; failed: number; failures: Array<{ file: string; error: string }> };
+			tokenUsage?: TokenUsage;
 		}
 	) {
 		const message: ChatMessage = {
@@ -1335,7 +1478,8 @@ class AIAssistantView extends ItemView {
 			timestamp: new Date(),
 			activeFile: metadata?.activeFile,
 			proposedEdits: metadata?.proposedEdits,
-			editResults: metadata?.editResults
+			editResults: metadata?.editResults,
+			tokenUsage: metadata?.tokenUsage
 		};
 		this.chatMessages.push(message);
 		this.renderMessage(message);
@@ -1349,6 +1493,15 @@ class AIAssistantView extends ItemView {
 		const welcome = this.chatContainer.querySelector('.ai-chat-welcome');
 		if (welcome) {
 			welcome.remove();
+		}
+
+		// Handle context-switch messages differently
+		if (message.type === 'context-switch') {
+			const indicator = this.chatContainer.createDiv({ cls: 'ai-chat-context-indicator' });
+			indicator.setAttribute('data-message-id', message.id);
+			indicator.createSpan({ cls: 'ai-chat-context-label', text: 'Context: ' });
+			indicator.createSpan({ cls: 'ai-chat-context-text', text: message.content });
+			return;
 		}
 
 		const messageEl = this.chatContainer.createDiv({
@@ -1366,6 +1519,12 @@ class AIAssistantView extends ItemView {
 				'',
 				this
 			);
+
+			// Add token usage footer if available and enabled
+			if (message.tokenUsage && this.plugin.settings.showTokenUsage) {
+				const usageEl = bubbleEl.createDiv({ cls: 'ai-chat-token-usage' });
+				usageEl.setText('Tokens: ' + formatTokenUsage(message.tokenUsage, this.plugin.settings.aiModel));
+			}
 		} else {
 			// Plain text for user messages
 			bubbleEl.setText(message.content);
@@ -1383,8 +1542,12 @@ class AIAssistantView extends ItemView {
 
 		if (this.chatContainer) {
 			this.chatContainer.empty();
-			this.welcomeMessage = this.chatContainer.createDiv({ cls: 'ai-chat-welcome' });
-			this.welcomeMessage.setText('Ask a question or request edits to your notes.');
+		}
+
+		// Show initial context for current file
+		const currentFile = this.app.workspace.getActiveFile();
+		if (currentFile) {
+			this.showContextIndicator(currentFile.path, currentFile.basename);
 		}
 
 		new Notice('Chat history cleared');
@@ -1544,6 +1707,15 @@ class AIAssistantView extends ItemView {
 			// Get messages except the most recent one (which is the current user message)
 			const historyMessages = this.chatMessages.slice(0, -1).slice(-historyLength);
 			for (const msg of historyMessages) {
+				// Handle context-switch messages
+				if (msg.type === 'context-switch') {
+					messages.push({
+						role: 'system',
+						content: `[CONTEXT SWITCH: User navigated to note "${msg.content}" (${msg.activeFile}). Messages after this point refer to this note as the active context.]`
+					});
+					continue;
+				}
+
 				// Build rich context for the message
 				let messageContent = '';
 
@@ -1581,7 +1753,7 @@ class AIAssistantView extends ItemView {
 				}
 
 				messages.push({
-					role: msg.role,
+					role: msg.role === 'user' ? 'user' : 'assistant',
 					content: messageContent
 				});
 			}
@@ -1615,9 +1787,17 @@ class AIAssistantView extends ItemView {
 		const data = response.json;
 		const reply = data.choices?.[0]?.message?.content ?? 'No response';
 
-		this.plugin.debugLog('[RESPONSE] Q&A Mode reply', reply);
+		// Capture token usage from API response
+		const tokenUsage: TokenUsage | undefined = data.usage ? {
+			promptTokens: data.usage.prompt_tokens ?? 0,
+			completionTokens: data.usage.completion_tokens ?? 0,
+			totalTokens: data.usage.total_tokens ?? 0
+		} : undefined;
 
-		this.addMessageToChat('assistant', reply, { activeFile: activeFilePath });
+		this.plugin.debugLog('[RESPONSE] Q&A Mode reply', reply);
+		this.plugin.debugLog('[USAGE] Token usage', tokenUsage);
+
+		this.addMessageToChat('assistant', reply, { activeFile: activeFilePath, tokenUsage });
 	}
 
 	async handleEditMode(context: string, activeFilePath: string) {
@@ -1643,7 +1823,15 @@ class AIAssistantView extends ItemView {
 		const data = response.json;
 		const reply = data.choices?.[0]?.message?.content ?? '{}';
 
+		// Capture token usage from API response
+		const tokenUsage: TokenUsage | undefined = data.usage ? {
+			promptTokens: data.usage.prompt_tokens ?? 0,
+			completionTokens: data.usage.completion_tokens ?? 0,
+			totalTokens: data.usage.total_tokens ?? 0
+		} : undefined;
+
 		this.plugin.debugLog('[RESPONSE] Edit Mode raw reply', reply);
+		this.plugin.debugLog('[USAGE] Token usage', tokenUsage);
 
 		const editResponse = this.plugin.parseAIEditResponse(reply);
 		if (!editResponse) {
@@ -1654,7 +1842,8 @@ class AIAssistantView extends ItemView {
 			this.addMessageToChat('assistant', 'No edits needed. ' + editResponse.summary, {
 				activeFile: activeFilePath,
 				proposedEdits: [],
-				editResults: { success: 0, failed: 0, failures: [] }
+				editResults: { success: 0, failed: 0, failures: [] },
+				tokenUsage
 			});
 			return;
 		}
@@ -1705,7 +1894,8 @@ class AIAssistantView extends ItemView {
 				success: result.success,
 				failed: result.failed,
 				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
-			}
+			},
+			tokenUsage
 		});
 	}
 
@@ -2047,6 +2237,16 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('Clear chat on note switch')
+			.setDesc('Clear chat history when switching to a different note. If off, shows a subtle context indicator instead.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.clearChatOnNoteSwitch)
+				.onChange(async (value) => {
+					this.plugin.settings.clearChatOnNoteSwitch = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName('Debug Mode')
 			.setDesc('Log prompts and AI responses to the developer console (Ctrl+Shift+I / Cmd+Option+I)')
 			.addToggle(toggle => toggle
@@ -2055,6 +2255,26 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					this.plugin.settings.debugMode = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName('Show token usage & cost estimate')
+			.setDesc('Display token count and estimated cost below each AI response.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.showTokenUsage)
+				.onChange(async (value) => {
+					this.plugin.settings.showTokenUsage = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Disclaimer for token usage
+		const tokenDisclaimer = containerEl.createEl('p', {
+			cls: 'setting-item-description',
+			text: '⚠️ Cost estimates are approximate and based on assumed pricing. Actual costs may vary. Always check your usage on the OpenAI dashboard and set spending limits to avoid unexpected charges.'
+		});
+		tokenDisclaimer.style.marginTop = '-8px';
+		tokenDisclaimer.style.marginBottom = '16px';
+		tokenDisclaimer.style.fontSize = '0.85em';
+		tokenDisclaimer.style.opacity = '0.8';
 
 		new Setting(containerEl)
 			.setName('Pending Edit Tag')

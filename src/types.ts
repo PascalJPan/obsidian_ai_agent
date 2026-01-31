@@ -44,6 +44,13 @@ export interface DiffLine {
 	content: string;
 }
 
+// Token usage from API response
+export interface TokenUsage {
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+}
+
 // Inline edit data structure
 export interface InlineEdit {
 	id: string;
@@ -56,9 +63,11 @@ export interface InlineEdit {
 // Chat message interface with rich context for AI memory
 export interface ChatMessage {
 	id: string;
-	role: 'user' | 'assistant';
+	role: 'user' | 'assistant' | 'system';
 	content: string;
 	timestamp: Date;
+	// Message type for special messages
+	type?: 'message' | 'context-switch';  // Default is 'message'
 	// Context for AI memory
 	activeFile?: string;           // Path of active file when message was sent
 	proposedEdits?: EditInstruction[];  // Edits the AI proposed (for assistant messages)
@@ -67,4 +76,6 @@ export interface ChatMessage {
 		failed: number;
 		failures: Array<{ file: string; error: string }>;
 	};
+	// Token usage from API response (for assistant messages)
+	tokenUsage?: TokenUsage;
 }

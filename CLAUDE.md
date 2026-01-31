@@ -5,6 +5,10 @@
 ### Completed
 - [x] Fix the "current note only" selection as other notes still receive edits even when it is clicked. Make it not prompt dependent (enforce in validation, not just AI instructions). **DONE**: Implemented `filterEditsByRules()` for hard enforcement.
 - [x] Modular architecture refactor - Split monolithic `main.ts` into focused modules
+- [x] **UI Polish** - Clear chat icon (eraser), pending edit widget styling, keyboard shortcuts
+- [x] **Token count display** - Show actual token usage and cost in chat messages
+- [x] **Debug output readability** - Debug mode now outputs readable JSON text instead of objects
+- [x] **JSON parse bug fix** - Fixed parsing failure when AI response content contained markdown code blocks
 
 ### Security & Validation
 - [ ] Audit prompt injection defenses (notes treated as data, not instructions)
@@ -17,8 +21,6 @@
 - [ ] Consider prompt caching strategies
 
 ### Observability & Debugging
-- [ ] **Settings: Token count display** - Show token count for all prompts (including hidden QA/Edit mode prompts) under each settings field
-- [ ] **Debug output readability** - Make full AI prompt readable in debug mode (objects may not be the best format)
 - [ ] Add structured logging for edit pipeline
 - [ ] Consider telemetry for edit success/failure rates
 
@@ -28,11 +30,6 @@
   - Add notes individually to context (picker UI)
   - Checkbox for whether all vault tags are visible to AI
 - [ ] Consider saved context presets/profiles
-
-### UI Polish
-- [ ] **Clear chat icon** - Change trash icon to eraser icon, make smaller
-- [ ] Improve pending edit widget styling
-- [ ] Add keyboard shortcuts
 
 ### Future Features
 - [ ] Support for other AI providers (Anthropic, local models)
