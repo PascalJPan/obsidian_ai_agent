@@ -84,8 +84,11 @@ export function buildScopeInstructionWithConfig(editableScope: EditableScope, co
 	const contextDesc = depthLabels[contextConfig.linkDepth];
 
 	let contextInfo = `Context includes: ${contextDesc}`;
-	if (contextConfig.includeSameFolder) {
-		contextInfo += ' + all notes in the same folder';
+	if (contextConfig.maxFolderNotes > 0) {
+		contextInfo += ` + up to ${contextConfig.maxFolderNotes} notes in the same folder`;
+	}
+	if (contextConfig.semanticMatchCount > 0) {
+		contextInfo += ` + up to ${contextConfig.semanticMatchCount} semantically similar notes`;
 	}
 	contextInfo += '.';
 
