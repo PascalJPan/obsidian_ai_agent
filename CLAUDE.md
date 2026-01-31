@@ -9,6 +9,7 @@
 - [x] **Token count display** - Show actual token usage and cost in chat messages
 - [x] **Debug output readability** - Debug mode now outputs readable JSON text instead of objects
 - [x] **JSON parse bug fix** - Fixed parsing failure when AI response content contained markdown code blocks
+- [x] **Context selection UI refactor** - Replaced radio buttons with link depth slider (0-3) and independent "Same Folder" checkbox. BFS traversal for multi-depth links where excluded folders act as walls.
 
 ### Security & Validation
 - [ ] Audit prompt injection defenses (notes treated as data, not instructions)
@@ -25,7 +26,10 @@
 - [ ] Consider telemetry for edit success/failure rates
 
 ### Context Selection Improvements
-- [ ] **Versatile context selection** - Options to:
+- [x] **Link depth slider** - 0-3 depth slider for multi-hop link traversal (BFS algorithm)
+- [x] **Same folder checkbox** - Independent, additive folder inclusion
+- [x] **Excluded folders as walls** - Excluded folders block traversal, not just exclusion
+- [ ] **Versatile context selection** - Additional options:
   - View all note names with alias/description fields from YAML frontmatter
   - Add notes individually to context (picker UI)
   - Checkbox for whether all vault tags are visible to AI
@@ -47,14 +51,18 @@ This is an Obsidian plugin that provides an agentic AI assistant for note editin
 - **Edit Mode**: AI proposes structured edits as JSON, which get converted to pending edit blocks
 
 ### Scopes
-- **Context Scope** (`ContextScope`): Which notes are sent to AI as context
-  - `current`: Only the active note
-  - `linked`: Current + outgoing links + backlinks
-  - `folder`: All notes in same folder
+- **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as context
+  - `linkDepth` (0-3): Controls how many hops of links to follow
+    - 0: Current note only
+    - 1: Direct links (outgoing + backlinks)
+    - 2-3: Links of links (BFS traversal)
+  - `includeSameFolder`: Additive checkbox to include all notes in same folder
+  - Excluded folders act as **walls**: files in them are excluded AND their links are not followed
+  - Legacy `ContextScope` type still supported for backwards compatibility
 
 - **Editable Scope** (`EditableScope`): Which notes AI is allowed to edit
   - `current`: Only current note
-  - `linked`: Current + linked notes
+  - `linked`: Current + directly linked notes
   - `context`: All context notes
 
 ### Capabilities (`AICapabilities`)
@@ -98,9 +106,12 @@ Wraps EditInstruction with resolved file, current/new content, and error state.
 - `applyEditBlockToContent()` - Applies edit block to content string in memory
 - `resolveEdit()` - Accepts/rejects a pending edit
 - `validateEdits()` - Validates AI instructions, resolves files, computes new content
-- `filterEditsByRules()` - **HARD ENFORCEMENT**: Validates edits against capabilities and editable scope
-- `getEditableFiles()` - Returns set of file paths allowed for editing based on scope
-- `buildContextWithScope()` - Builds context string with line numbers
+- `filterEditsByRulesWithConfig()` - **HARD ENFORCEMENT**: Validates edits against capabilities and editable scope
+- `getEditableFilesWithConfig()` - Returns set of file paths allowed for editing based on scope config
+- `buildContextWithScopeConfig()` - Builds context string with line numbers using new config
+- `getLinkedFilesBFS()` - BFS traversal for multi-depth link resolution (excluded folders = walls)
+- `getSameFolderFiles()` - Gets all non-excluded files in same folder
+- `normalizeContextScope()` - Converts legacy `ContextScope` to new `ContextScopeConfig`
 
 **AIAssistantView**
 - `handleEditMode()` - Orchestrates edit flow: API call → parse → validate → filter → insert blocks

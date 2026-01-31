@@ -5,9 +5,17 @@
 import { TFile } from 'obsidian';
 
 // Type definitions
-export type ContextScope = 'current' | 'linked' | 'folder';
+export type ContextScope = 'current' | 'linked' | 'folder';  // Legacy - kept for backwards compatibility
 export type EditableScope = 'current' | 'linked' | 'context';
 export type Mode = 'qa' | 'edit';
+
+// New context scope configuration
+export type LinkDepth = 0 | 1 | 2 | 3;
+
+export interface ContextScopeConfig {
+	linkDepth: LinkDepth;       // 0=current only, 1=direct links, 2-3=deeper traversal
+	includeSameFolder: boolean; // Additive folder inclusion (independent of link depth)
+}
 
 export interface AICapabilities {
 	canAdd: boolean;

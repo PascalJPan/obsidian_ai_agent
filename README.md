@@ -19,9 +19,12 @@ Think of it as a collaborator that:
 - **Edit Mode** — Request changes and review them before they're applied
 
 **Flexible Context**
-- Current note only
-- Include linked notes (outgoing + backlinks)
-- Include all notes in the same folder
+- Link depth slider (0-3): control how many hops of links to include
+  - 0: Current note only
+  - 1: Direct links (outgoing + backlinks)
+  - 2-3: Links of links (BFS traversal)
+- Optional: include all notes in the same folder (additive)
+- Excluded folders act as walls—blocks traversal, not just exclusion
 
 **Granular Permissions**
 - Control which notes the AI can edit
