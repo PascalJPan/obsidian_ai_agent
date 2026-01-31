@@ -34,6 +34,29 @@
 	font-style: italic;
 }
 
+/* Context switch indicator */
+.ai-chat-context-indicator {
+	text-align: center;
+	padding: 5px 14px;
+	margin: 12px auto;
+	font-size: 0.78em;
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 14px;
+	align-self: center;
+	max-width: fit-content;
+}
+
+.ai-chat-context-label {
+	opacity: 0.7;
+}
+
+.ai-chat-context-text {
+	font-weight: 500;
+	color: var(--text-normal);
+}
+
 /* Chat messages */
 .ai-chat-message {
 	display: flex;
@@ -358,21 +381,30 @@
    =================================== */
 
 .ai-edit-widget {
-	border: 2px solid var(--interactive-accent);
-	border-radius: 8px;
-	padding: 12px;
-	margin: 12px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 6px;
+	padding: 14px 16px;
+	margin: 16px 0;
 	background: var(--background-primary);
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+	transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.ai-edit-widget:hover {
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), 0 8px 24px rgba(0, 0, 0, 0.08);
+	border-color: var(--interactive-accent);
 }
 
 .ai-edit-type-badge {
-	font-size: 0.8em;
+	font-size: 0.75em;
 	font-weight: 600;
-	padding: 2px 8px;
-	border-radius: 4px;
+	padding: 3px 10px;
+	border-radius: 12px;
 	display: inline-block;
-	margin-bottom: 10px;
+	margin-bottom: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
 }
 
 .ai-edit-badge-add {
@@ -431,38 +463,45 @@
 .ai-edit-actions {
 	display: flex;
 	justify-content: flex-end;
-	gap: 8px;
-	margin-top: 10px;
-	padding-top: 10px;
+	gap: 10px;
+	margin-top: 14px;
+	padding-top: 12px;
 	border-top: 1px solid var(--background-modifier-border);
 }
 
 .ai-edit-reject {
-	background: rgba(255, 100, 100, 0.2);
-	color: var(--text-error);
-	border: 1px solid var(--text-error);
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--background-modifier-border);
 	padding: 6px 16px;
-	border-radius: 4px;
+	border-radius: 6px;
 	cursor: pointer;
 	font-weight: 500;
+	font-size: 0.9em;
+	transition: all 0.15s ease;
 }
 
 .ai-edit-reject:hover {
-	background: rgba(255, 100, 100, 0.35);
+	background: rgba(255, 100, 100, 0.15);
+	color: var(--text-error);
+	border-color: var(--text-error);
 }
 
 .ai-edit-accept {
-	background: rgba(100, 255, 100, 0.2);
-	color: var(--text-success, #4ade80);
-	border: 1px solid var(--text-success, #4ade80);
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: 1px solid var(--interactive-accent);
 	padding: 6px 16px;
-	border-radius: 4px;
+	border-radius: 6px;
 	cursor: pointer;
 	font-weight: 500;
+	font-size: 0.9em;
+	transition: all 0.15s ease;
 }
 
 .ai-edit-accept:hover {
-	background: rgba(100, 255, 100, 0.35);
+	background: var(--interactive-accent-hover);
+	border-color: var(--interactive-accent-hover);
 }
 
 .ai-edit-error {
@@ -923,4 +962,28 @@ button:disabled {
 .ai-assistant-action-btn svg {
 	width: 16px;
 	height: 16px;
+}
+
+/* Smaller action button variant */
+.ai-assistant-action-btn-small {
+	width: 26px;
+	height: 26px;
+}
+
+.ai-assistant-action-btn-small svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* ===================================
+   Token Usage Display
+   =================================== */
+
+.ai-chat-token-usage {
+	font-size: 0.75em;
+	color: var(--text-muted);
+	margin-top: 8px;
+	padding-top: 6px;
+	border-top: 1px solid var(--background-modifier-border);
+	opacity: 0.8;
 }
