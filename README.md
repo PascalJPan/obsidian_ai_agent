@@ -70,6 +70,14 @@ Your second brain should be *yours*. This plugin is designed to assist, not auto
 
 Build your knowledge base with an assistant that respects your agency.
 
+## For Developers
+
+The plugin uses a modular architecture with the core logic organized in `src/`:
+- `src/ai/` — Prompt building, context utilities, edit validation
+- `src/edits/` — Diff computation and text processing
+
+See `CLAUDE.md` for detailed developer documentation.
+
 ---
 
 *Currently in active development. Contributions and feedback welcome.*

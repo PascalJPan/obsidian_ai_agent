@@ -882,3 +882,45 @@ button:disabled {
 	color: var(--text-muted);
 	font-weight: normal;
 }
+
+/* ===================================
+   Actions Bar
+   =================================== */
+
+.ai-assistant-actions-bar {
+	display: flex;
+	gap: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 4px;
+}
+
+.ai-assistant-action-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.ai-assistant-action-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+
+.ai-assistant-action-btn:active {
+	background: var(--background-modifier-active-hover);
+}
+
+.ai-assistant-action-btn svg {
+	width: 16px;
+	height: 16px;
+}
