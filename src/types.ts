@@ -13,10 +13,11 @@ export type Mode = 'qa' | 'edit';
 export type LinkDepth = 0 | 1 | 2 | 3;
 
 export interface ContextScopeConfig {
-	linkDepth: LinkDepth;       // 0=current only, 1=direct links, 2-3=deeper traversal
-	includeSameFolder: boolean; // Additive folder inclusion (independent of link depth)
-	includeSemanticMatches: boolean;  // Include semantically similar notes
-	semanticMatchCount: number;        // Number of semantic matches to include (0-20)
+	linkDepth: LinkDepth;           // 0=current only, 1=direct links, 2-3=deeper traversal
+	maxLinkedNotes: number;         // 0-50, 0 = use all linked notes
+	maxFolderNotes: number;         // 0-20, 0 = none (replaces includeSameFolder)
+	semanticMatchCount: number;     // 0-20, 0 = none (replaces includeSemanticMatches)
+	semanticMinSimilarity: number;  // 0-100, percentage threshold for semantic matches
 }
 
 // Embedding types for semantic search

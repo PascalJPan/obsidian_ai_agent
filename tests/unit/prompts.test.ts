@@ -91,9 +91,10 @@ describe('buildScopeInstruction', () => {
 describe('buildScopeInstructionWithConfig', () => {
 	const baseConfig: ContextScopeConfig = {
 		linkDepth: 0,
-		includeSameFolder: false,
-		includeSemanticMatches: false,
-		semanticMatchCount: 0
+		maxLinkedNotes: 20,
+		maxFolderNotes: 0,
+		semanticMatchCount: 0,
+		semanticMinSimilarity: 50
 	};
 
 	it('includes link depth 0 description', () => {
@@ -120,16 +121,28 @@ describe('buildScopeInstructionWithConfig', () => {
 		expect(result).toContain('3 hops');
 	});
 
-	it('includes same folder when enabled', () => {
-		const config: ContextScopeConfig = { ...baseConfig, includeSameFolder: true };
+	it('includes same folder when maxFolderNotes > 0', () => {
+		const config: ContextScopeConfig = { ...baseConfig, maxFolderNotes: 10 };
 		const result = buildScopeInstructionWithConfig('context', config);
 		expect(result).toContain('same folder');
 	});
 
-	it('does not include same folder when disabled', () => {
-		const config: ContextScopeConfig = { ...baseConfig, includeSameFolder: false };
+	it('does not include same folder when maxFolderNotes is 0', () => {
+		const config: ContextScopeConfig = { ...baseConfig, maxFolderNotes: 0 };
 		const result = buildScopeInstructionWithConfig('context', config);
 		expect(result).not.toContain('same folder');
+	});
+
+	it('includes semantic notes when semanticMatchCount > 0', () => {
+		const config: ContextScopeConfig = { ...baseConfig, semanticMatchCount: 5 };
+		const result = buildScopeInstructionWithConfig('context', config);
+		expect(result).toContain('semantically similar notes');
+	});
+
+	it('does not include semantic notes when semanticMatchCount is 0', () => {
+		const config: ContextScopeConfig = { ...baseConfig, semanticMatchCount: 0 };
+		const result = buildScopeInstructionWithConfig('context', config);
+		expect(result).not.toContain('semantically similar notes');
 	});
 });
 

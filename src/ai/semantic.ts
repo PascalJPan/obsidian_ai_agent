@@ -2,7 +2,7 @@
  * Semantic search utilities for embedding-based note similarity
  */
 
-import { requestUrl, Vault, TFile, TFolder } from 'obsidian';
+import { requestUrl, Vault, TFolder } from 'obsidian';
 import { EmbeddingChunk, EmbeddingIndex, EmbeddingModel } from '../types';
 
 // Chunk interface for internal processing
@@ -250,12 +250,14 @@ export async function reindexVault(
 /**
  * Search for semantically similar notes
  * Returns top-K unique notes (deduplicated by path, keeping highest score)
+ * @param minSimilarity Optional threshold (0-1) to filter out low-similarity results
  */
 export function searchSemantic(
 	queryEmbedding: number[],
 	index: EmbeddingIndex,
 	excludePaths: Set<string>,
-	topK: number
+	topK: number,
+	minSimilarity?: number
 ): { notePath: string; score: number; heading: string }[] {
 	// Calculate similarity for all non-excluded chunks
 	const scores: { notePath: string; score: number; heading: string }[] = [];
@@ -266,6 +268,12 @@ export function searchSemantic(
 		}
 
 		const similarity = cosineSimilarity(queryEmbedding, chunk.embedding);
+
+		// Filter by minimum similarity threshold if provided
+		if (minSimilarity !== undefined && similarity < minSimilarity) {
+			continue;
+		}
+
 		scores.push({
 			notePath: chunk.notePath,
 			score: similarity,
@@ -297,6 +305,7 @@ export function searchSemantic(
 
 /**
  * Load embedding index from plugin data folder
+ * Uses vault.adapter for direct file access (works with .obsidian files)
  */
 export async function loadEmbeddingIndex(
 	vault: Vault,
@@ -304,11 +313,12 @@ export async function loadEmbeddingIndex(
 ): Promise<EmbeddingIndex | null> {
 	try {
 		const indexPath = `${pluginDataPath}/embeddings.json`;
-		const file = vault.getAbstractFileByPath(indexPath);
-		if (!file || !(file instanceof TFile)) {
+		// Use adapter for direct file access - vault.getAbstractFileByPath doesn't index .obsidian files
+		const exists = await vault.adapter.exists(indexPath);
+		if (!exists) {
 			return null;
 		}
-		const content = await vault.read(file);
+		const content = await vault.adapter.read(indexPath);
 		return JSON.parse(content) as EmbeddingIndex;
 	} catch (error) {
 		console.error('Failed to load embedding index:', error);
@@ -318,6 +328,7 @@ export async function loadEmbeddingIndex(
 
 /**
  * Save embedding index to plugin data folder
+ * Uses vault.adapter for direct file access (works with .obsidian files)
  */
 export async function saveEmbeddingIndex(
 	vault: Vault,
@@ -326,20 +337,6 @@ export async function saveEmbeddingIndex(
 ): Promise<void> {
 	const indexPath = `${pluginDataPath}/embeddings.json`;
 	const content = JSON.stringify(index);
-
-	const existingFile = vault.getAbstractFileByPath(indexPath);
-	if (existingFile && existingFile instanceof TFile) {
-		await vault.modify(existingFile, content);
-	} else {
-		// Ensure the directory exists (may already exist but not be in Obsidian's cache)
-		const folder = vault.getAbstractFileByPath(pluginDataPath);
-		if (!folder) {
-			try {
-				await vault.createFolder(pluginDataPath);
-			} catch (e) {
-				// Folder already exists, ignore
-			}
-		}
-		await vault.create(indexPath, content);
-	}
+	// Use adapter.write which handles both create and update
+	await vault.adapter.write(indexPath, content);
 }
