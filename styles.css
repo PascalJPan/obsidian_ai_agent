@@ -311,6 +311,72 @@
 	font-weight: normal;
 }
 
+/* ===================================
+   Link Depth Slider
+   =================================== */
+
+.ai-assistant-slider-section {
+	margin-bottom: 12px;
+}
+
+.ai-assistant-slider-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+}
+
+.ai-assistant-depth-slider {
+	flex: 1;
+	height: 4px;
+	-webkit-appearance: none;
+	appearance: none;
+	background: var(--background-modifier-border);
+	border-radius: 2px;
+	outline: none;
+	cursor: pointer;
+}
+
+.ai-assistant-depth-slider::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 14px;
+	height: 14px;
+	background: var(--interactive-accent);
+	border-radius: 50%;
+	cursor: pointer;
+	border: 2px solid var(--background-primary);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.ai-assistant-depth-slider::-moz-range-thumb {
+	width: 14px;
+	height: 14px;
+	background: var(--interactive-accent);
+	border-radius: 50%;
+	cursor: pointer;
+	border: 2px solid var(--background-primary);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.ai-assistant-slider-value {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	white-space: nowrap;
+	min-width: 80px;
+	text-align: right;
+}
+
+/* ===================================
+   Folder Checkbox Section
+   =================================== */
+
+.ai-assistant-folder-section {
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 10px;
+}
+
 /* Radio groups */
 .ai-assistant-radio-group {
 	display: flex;

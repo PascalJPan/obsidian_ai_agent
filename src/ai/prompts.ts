@@ -8,7 +8,7 @@
  * No vault or UI access.
  */
 
-import { AICapabilities, EditableScope } from '../types';
+import { AICapabilities, EditableScope, ContextScopeConfig } from '../types';
 
 // Core prompts - hardcoded, not user-editable
 export const CORE_QA_PROMPT = `You are an AI assistant helping the user with their Obsidian vault.
@@ -64,6 +64,32 @@ export function buildScopeInstruction(editableScope: EditableScope): string {
 		scopeText = 'You may edit any note provided in the context.';
 	}
 	return `SCOPE RULE: ${scopeText}`;
+}
+
+// New version: Build scope instruction with context config details
+export function buildScopeInstructionWithConfig(editableScope: EditableScope, contextConfig: ContextScopeConfig): string {
+	let scopeText = '';
+
+	// Editable scope description
+	if (editableScope === 'current') {
+		scopeText = 'You may ONLY edit the current note (the first file in the context).';
+	} else if (editableScope === 'linked') {
+		scopeText = 'You may edit the current note and any directly linked notes (outgoing or backlinks).';
+	} else {
+		scopeText = 'You may edit any note provided in the context.';
+	}
+
+	// Add context details for AI awareness
+	const depthLabels = ['current note only', 'directly linked notes', 'notes up to 2 hops away', 'notes up to 3 hops away'];
+	const contextDesc = depthLabels[contextConfig.linkDepth];
+
+	let contextInfo = `Context includes: ${contextDesc}`;
+	if (contextConfig.includeSameFolder) {
+		contextInfo += ' + all notes in the same folder';
+	}
+	contextInfo += '.';
+
+	return `SCOPE RULE: ${scopeText}\n\n${contextInfo}`;
 }
 
 // Helper: Build position types based on capabilities
