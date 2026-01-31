@@ -20,5 +20,9 @@
   },
   "include": [
     "**/*.ts"
+  ],
+  "exclude": [
+    "tests/**/*",
+    "vitest.config.ts"
   ]
 }
