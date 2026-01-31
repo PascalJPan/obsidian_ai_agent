@@ -1053,3 +1053,139 @@ button:disabled {
 	border-top: 1px solid var(--background-modifier-border);
 	opacity: 0.8;
 }
+
+/* ===================================
+   Semantic Search Section
+   =================================== */
+
+.ai-assistant-semantic-section {
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 10px;
+}
+
+.ai-assistant-semantic-slider {
+	margin-top: 8px;
+	margin-left: 22px;
+}
+
+.ai-assistant-semantic-warning {
+	font-size: 0.8em;
+	color: var(--text-warning);
+	margin-top: 8px;
+	padding: 6px 10px;
+	background: rgba(255, 200, 100, 0.1);
+	border-radius: 4px;
+	border-left: 3px solid var(--text-warning);
+}
+
+/* ===================================
+   Context Preview Modal
+   =================================== */
+
+.context-preview-modal {
+	padding: 20px;
+	max-width: 500px;
+}
+
+.context-preview-modal h2 {
+	margin-top: 0;
+	margin-bottom: 12px;
+}
+
+.context-preview-summary {
+	color: var(--text-muted);
+	margin-bottom: 16px;
+	font-size: 0.9em;
+}
+
+.context-preview-list {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-bottom: 20px;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.context-preview-group {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.context-preview-group-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	background: var(--background-secondary);
+	font-weight: 500;
+	font-size: 0.9em;
+}
+
+.context-preview-icon {
+	display: flex;
+	align-items: center;
+	color: var(--text-muted);
+}
+
+.context-preview-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.context-preview-group-title {
+	color: var(--text-normal);
+}
+
+.context-preview-group-items {
+	padding: 8px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.context-preview-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 0;
+}
+
+.context-preview-item a {
+	color: var(--text-accent);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.context-preview-item a:hover {
+	text-decoration: underline;
+}
+
+.context-preview-score {
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+.context-preview-buttons {
+	display: flex;
+	justify-content: flex-end;
+	padding-top: 12px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* ===================================
+   Embedding Index Status
+   =================================== */
+
+.embedding-index-status {
+	margin-top: 8px;
+	padding: 8px 0;
+}
+
+.embedding-index-status p {
+	margin: 4px 0;
+	font-size: 0.85em;
+	color: var(--text-muted);
+}

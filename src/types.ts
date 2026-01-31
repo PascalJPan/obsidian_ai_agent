@@ -15,6 +15,34 @@ export type LinkDepth = 0 | 1 | 2 | 3;
 export interface ContextScopeConfig {
 	linkDepth: LinkDepth;       // 0=current only, 1=direct links, 2-3=deeper traversal
 	includeSameFolder: boolean; // Additive folder inclusion (independent of link depth)
+	includeSemanticMatches: boolean;  // Include semantically similar notes
+	semanticMatchCount: number;        // Number of semantic matches to include (0-20)
+}
+
+// Embedding types for semantic search
+export type EmbeddingModel = 'text-embedding-3-small' | 'text-embedding-3-large';
+
+export interface EmbeddingChunk {
+	notePath: string;
+	heading: string;        // Empty string if no heading (preamble or whole note)
+	content: string;
+	hash: string;           // sha256(heading + content)
+	embedding: number[];    // 1536 dims (small) or 3072 dims (large)
+}
+
+export interface EmbeddingIndex {
+	model: EmbeddingModel;
+	lastUpdated: string;    // ISO timestamp
+	chunks: EmbeddingChunk[];
+}
+
+// Context info for preview modal
+export interface ContextInfo {
+	currentNote: string;
+	linkedNotes: string[];
+	folderNotes: string[];
+	semanticNotes: { path: string; score: number }[];
+	totalTokenEstimate: number;
 }
 
 export interface AICapabilities {
