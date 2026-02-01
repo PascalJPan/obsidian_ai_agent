@@ -1,5 +1,5 @@
 /**
- * Diff utilities for AI Assistant
+ * Diff utilities for ObsidianAgent
  *
  * Computes diffs for previews only.
  * No vault writes.

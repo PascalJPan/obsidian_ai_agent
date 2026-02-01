@@ -1,5 +1,5 @@
 /**
- * Context utilities for AI Assistant
+ * Context utilities for ObsidianAgent
  *
  * Pure utility functions for context building.
  * Note: Functions that depend on Obsidian vault/app remain in main.ts

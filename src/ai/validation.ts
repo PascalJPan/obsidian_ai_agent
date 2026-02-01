@@ -1,5 +1,5 @@
 /**
- * Edit validation utilities for AI Assistant
+ * Edit validation utilities for ObsidianAgent
  *
  * Pure validation and computation functions.
  * Note: Functions that depend on Obsidian vault/app remain in main.ts

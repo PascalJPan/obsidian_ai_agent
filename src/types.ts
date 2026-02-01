@@ -1,5 +1,5 @@
 /**
- * Shared type definitions for AI Assistant Plugin
+ * Shared type definitions for ObsidianAgent Plugin
  */
 
 import { TFile } from 'obsidian';
@@ -7,7 +7,7 @@ import { TFile } from 'obsidian';
 // Type definitions
 export type ContextScope = 'current' | 'linked' | 'folder';  // Legacy - kept for backwards compatibility
 export type EditableScope = 'current' | 'linked' | 'context';
-export type Mode = 'qa' | 'edit' | 'agentic';
+export type Mode = 'edit' | 'agentic';
 
 // New context scope configuration
 export type LinkDepth = 0 | 1 | 2 | 3;
@@ -18,6 +18,7 @@ export interface ContextScopeConfig {
 	maxFolderNotes: number;         // 0-20, 0 = none (replaces includeSameFolder)
 	semanticMatchCount: number;     // 0-20, 0 = none (replaces includeSemanticMatches)
 	semanticMinSimilarity: number;  // 0-100, percentage threshold for semantic matches
+	manuallyAddedNotes?: string[];  // Paths of notes manually added via picker
 }
 
 // Embedding types for semantic search
@@ -37,13 +38,23 @@ export interface EmbeddingIndex {
 	chunks: EmbeddingChunk[];
 }
 
+// Frontmatter metadata for context display
+export interface NoteFrontmatter {
+	path: string;
+	aliases?: string[];
+	description?: string;
+}
+
 // Context info for preview modal
 export interface ContextInfo {
 	currentNote: string;
 	linkedNotes: string[];
 	folderNotes: string[];
 	semanticNotes: { path: string; score: number }[];
+	manualNotes: string[];  // Manually added notes via picker
 	totalTokenEstimate: number;
+	// Optional frontmatter metadata for enhanced display
+	frontmatter?: Map<string, NoteFrontmatter>;
 }
 
 export interface AICapabilities {
@@ -116,6 +127,7 @@ export interface ContextAgentResult {
 	selectedPaths: string[];
 	reasoning: string;
 	toolCalls: ContextAgentToolCall[];  // For progress display
+	recommendedMode?: 'qa' | 'edit';    // Agent's recommended mode for Phase 2
 }
 
 // Progress event for live UI updates
@@ -143,6 +155,13 @@ export interface SemanticSearchResult {
 export interface LinkInfo {
 	path: string;
 	direction: 'outgoing' | 'backlink';
+}
+
+// Token-limited context result for smart note removal
+export interface TokenLimitedContextResult {
+	context: string;
+	removedNotes: string[];
+	totalTokens: number;
 }
 
 // Chat message interface with rich context for AI memory

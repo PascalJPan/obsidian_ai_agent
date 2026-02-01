@@ -1,5 +1,5 @@
 /**
- * Prompt definitions and builders for AI Assistant
+ * Prompt definitions and builders for ObsidianAgent
  *
  * This module contains:
  * - Core system prompts (hardcoded, not user-editable)
@@ -10,12 +10,13 @@
 
 import { AICapabilities, EditableScope, ContextScopeConfig } from '../types';
 
-// Core prompts - hardcoded, not user-editable
-export const CORE_QA_PROMPT = `You are an AI assistant helping the user with their Obsidian vault.
-Answer questions based on the note content provided in the context.
-Be accurate and helpful.`;
+// Token limit constants for validation
+export const BASE_SYSTEM_PROMPT_ESTIMATE = 2500; // Approximate tokens for full system prompt
+export const MINIMUM_CONTEXT_BUFFER = 500;       // Buffer for response and minimal context
+export const MINIMUM_TOKEN_LIMIT = 3000;         // Minimum allowed token limit setting
 
-export const CORE_EDIT_PROMPT = `You are an AI Agent that edits notes in an Obsidian vault.
+// Core prompts - hardcoded, not user-editable
+export const CORE_EDIT_PROMPT = `You are an AI Agent for an Obsidian vault. You can edit notes or answer questions.
 
 IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation outside the JSON.
 
@@ -28,12 +29,26 @@ Your response must follow this exact format:
   "edits": [
     { "file": "Note Name.md", "position": "end", "content": "Content to add" }
   ],
-  "summary": "Brief explanation of what changes you made"
-}`
+  "summary": "Brief explanation of what changes you made or answer to the question"
+}
+
+HANDLING QUESTIONS:
+- If the user asks a question or requests information (not edits), return an empty edits array
+- Put your answer in the "summary" field
+- Example: { "edits": [], "summary": "The answer to your question is..." }`
 
 // Helper: Build forbidden actions section based on disabled capabilities
 export function buildForbiddenActions(capabilities: AICapabilities, editableScope: EditableScope): string {
 	const forbidden: string[] = [];
+
+	// Check if ALL edit capabilities are disabled (Q&A only mode)
+	const allDisabled = !capabilities.canAdd && !capabilities.canDelete && !capabilities.canCreate;
+	if (allDisabled) {
+		return `\n\n## Q&A ONLY MODE:
+All edit capabilities are disabled. You can ONLY answer questions.
+- Always return an empty edits array: { "edits": [], "summary": "your answer here" }
+- DO NOT propose any edits - they will all be rejected`;
+	}
 
 	if (!capabilities.canAdd) {
 		forbidden.push('- DO NOT use "start", "end", "after:", or "insert:" positions');
