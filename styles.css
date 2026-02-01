@@ -1197,3 +1197,121 @@ button:disabled {
 	font-size: 0.85em;
 	color: var(--text-muted);
 }
+
+/* ===================================
+   Agentic Mode UI
+   =================================== */
+
+/* Agentic sub-mode selector */
+.ai-assistant-agentic-submode {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 4px;
+}
+
+/* Agent progress container in chat */
+.ai-agent-progress-container {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 12px 14px;
+	margin: 8px 0;
+}
+
+.ai-agent-progress-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 500;
+	font-size: 0.95em;
+	margin-bottom: 8px;
+}
+
+.ai-agent-progress-icon {
+	font-size: 1.1em;
+}
+
+.ai-agent-progress-title {
+	color: var(--text-normal);
+}
+
+/* Progress steps */
+.ai-agent-progress-step {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	font-size: 0.85em;
+	padding: 3px 0;
+	color: var(--text-muted);
+}
+
+.ai-agent-progress-bullet {
+	color: var(--interactive-accent);
+	flex-shrink: 0;
+}
+
+.ai-agent-progress-text {
+	color: var(--text-normal);
+}
+
+.ai-agent-progress-detail {
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+/* Reasoning toggle */
+.ai-agent-reasoning-toggle {
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-agent-reasoning-toggle summary {
+	cursor: pointer;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	user-select: none;
+}
+
+.ai-agent-reasoning-toggle summary:hover {
+	color: var(--text-normal);
+}
+
+.ai-agent-reasoning-toggle[open] summary {
+	margin-bottom: 8px;
+}
+
+.ai-agent-reasoning-content {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	line-height: 1.5;
+	padding: 8px 10px;
+	background: var(--background-primary);
+	border-radius: 4px;
+}
+
+/* Animation for progress steps appearing */
+.ai-agent-progress-step {
+	animation: fadeInStep 0.2s ease-in;
+}
+
+@keyframes fadeInStep {
+	from {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/* Completed state styling */
+.ai-agent-progress-container.completed .ai-agent-progress-icon {
+	color: var(--text-success, #4ade80);
+}
+
+.ai-agent-progress-container.completed .ai-agent-progress-title {
+	color: var(--text-success, #4ade80);
+}
