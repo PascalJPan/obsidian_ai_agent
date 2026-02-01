@@ -1945,18 +1945,40 @@ class AIAssistantView extends ItemView {
 		}
 	}
 
+	// Track agent exploration state
+	private agentActionsToggle: HTMLDetailsElement | null = null;
+	private agentStepsContainer: HTMLDivElement | null = null;
+	private currentRoundNumber: number = 0;
+
 	// Show agent progress in chat during exploration
 	showAgentProgress(message: string, detail?: string) {
-		if (!this.agentProgressContainer) return;
+		if (!this.agentStepsContainer) return;
 
-		const stepEl = this.agentProgressContainer.createDiv({ cls: 'ai-agent-progress-step' });
-		const bulletEl = stepEl.createSpan({ cls: 'ai-agent-progress-bullet' });
-		bulletEl.setText('\u2022');
-		const textEl = stepEl.createSpan({ cls: 'ai-agent-progress-text' });
-		textEl.setText(message);
-		if (detail) {
-			const detailEl = stepEl.createSpan({ cls: 'ai-agent-progress-detail' });
-			detailEl.setText(` \u2192 ${detail}`);
+		// Check if this is a new exploration round
+		if (message.startsWith('Exploration round')) {
+			this.currentRoundNumber++;
+			// Add separator line between rounds (not before the first round)
+			if (this.currentRoundNumber > 1) {
+				const separator = this.agentStepsContainer.createDiv({ cls: 'ai-agent-round-separator' });
+				separator.createSpan({ cls: 'ai-agent-round-separator-line' });
+				separator.createSpan({ cls: 'ai-agent-round-separator-text', text: message });
+				separator.createSpan({ cls: 'ai-agent-round-separator-line' });
+			} else {
+				// First round - just show as header text
+				const roundHeader = this.agentStepsContainer.createDiv({ cls: 'ai-agent-round-header' });
+				roundHeader.setText(message);
+			}
+		} else {
+			// Regular step
+			const stepEl = this.agentStepsContainer.createDiv({ cls: 'ai-agent-progress-step' });
+			const bulletEl = stepEl.createSpan({ cls: 'ai-agent-progress-bullet' });
+			bulletEl.setText('\u2022');
+			const textEl = stepEl.createSpan({ cls: 'ai-agent-progress-text' });
+			textEl.setText(message);
+			if (detail) {
+				const detailEl = stepEl.createSpan({ cls: 'ai-agent-progress-detail' });
+				detailEl.setText(` \u2192 ${detail}`);
+			}
 		}
 
 		this.scrollChatToBottom();
@@ -1974,33 +1996,80 @@ class AIAssistantView extends ItemView {
 			welcome.remove();
 		}
 
+		// Reset state
+		this.currentRoundNumber = 0;
+
 		this.agentProgressContainer = this.chatContainer.createDiv({ cls: 'ai-agent-progress-container' });
 
 		const headerEl = this.agentProgressContainer.createDiv({ cls: 'ai-agent-progress-header' });
 		headerEl.createSpan({ cls: 'ai-agent-progress-icon', text: '\uD83D\uDD0D' });
 		headerEl.createSpan({ cls: 'ai-agent-progress-title', text: ' Exploring vault...' });
 
+		// Create collapsible actions toggle (starts open during exploration)
+		this.agentActionsToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-actions-toggle' });
+		this.agentActionsToggle.open = true;
+		const actionsSummary = this.agentActionsToggle.createEl('summary');
+		actionsSummary.setText('\u25B8 Exploration actions');
+
+		// Container for actual steps
+		this.agentStepsContainer = this.agentActionsToggle.createDiv({ cls: 'ai-agent-steps-container' });
+
 		this.scrollChatToBottom();
 		return this.agentProgressContainer;
 	}
 
 	// Update progress header when exploration completes
-	completeAgentProgress(noteCount: number, reasoning: string) {
+	completeAgentProgress(noteCount: number, reasoning: string, selectedPaths: string[]) {
 		if (!this.agentProgressContainer) return;
+
+		// Add completed class for styling
+		this.agentProgressContainer.addClass('completed');
 
 		const header = this.agentProgressContainer.querySelector('.ai-agent-progress-header');
 		if (header) {
 			header.empty();
 			header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2713' });
 			header.createSpan({ cls: 'ai-agent-progress-title', text: ` Context curated (${noteCount} notes)` });
-
-			// Add expandable reasoning
-			const reasoningToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-reasoning-toggle' });
-			const summary = reasoningToggle.createEl('summary');
-			summary.setText('\u25B8 View reasoning');
-			const reasoningContent = reasoningToggle.createDiv({ cls: 'ai-agent-reasoning-content' });
-			reasoningContent.setText(reasoning);
 		}
+
+		// Collapse the actions toggle
+		if (this.agentActionsToggle) {
+			this.agentActionsToggle.open = false;
+		}
+
+		// Add selected notes toggle (collapsed)
+		const notesToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-notes-toggle' });
+		const notesSummary = notesToggle.createEl('summary');
+		notesSummary.setText(`\u25B8 Selected notes (${selectedPaths.length})`);
+		const notesContent = notesToggle.createDiv({ cls: 'ai-agent-notes-content' });
+
+		const notesList = notesContent.createEl('ul', { cls: 'ai-agent-notes-list' });
+		for (const path of selectedPaths) {
+			const noteItem = notesList.createEl('li');
+			const noteText = noteItem.createSpan({ cls: 'ai-agent-note-path' });
+			noteText.setText(path);
+
+			// Add clickable link icon
+			const linkIcon = noteItem.createSpan({ cls: 'ai-agent-note-link' });
+			setIcon(linkIcon, 'link');
+			linkIcon.title = 'Open note';
+			linkIcon.addEventListener('click', (e) => {
+				e.stopPropagation();
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (file instanceof TFile) {
+					this.app.workspace.getLeaf(false).openFile(file);
+				}
+			});
+		}
+
+		// Add explanation toggle (collapsed)
+		const reasoningToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-reasoning-toggle' });
+		const reasoningSummary = reasoningToggle.createEl('summary');
+		reasoningSummary.setText('\u25B8 Explanation');
+		const reasoningContent = reasoningToggle.createDiv({ cls: 'ai-agent-reasoning-content' });
+		reasoningContent.setText(reasoning);
+
+		this.scrollChatToBottom();
 	}
 
 	// Remove agent progress container
@@ -2656,7 +2725,7 @@ class AIAssistantView extends ItemView {
 		}
 
 		// Show completion status
-		this.completeAgentProgress(contextResult.selectedPaths.length, contextResult.reasoning);
+		this.completeAgentProgress(contextResult.selectedPaths.length, contextResult.reasoning, contextResult.selectedPaths);
 
 		// Phase 2: Build context from selected paths and run task agent
 		const context = await this.buildContextFromPaths(contextResult.selectedPaths, userMessage);
