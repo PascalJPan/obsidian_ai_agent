@@ -10,6 +10,13 @@
 - [x] **Debug output readability** - Debug mode now outputs readable JSON text instead of objects
 - [x] **JSON parse bug fix** - Fixed parsing failure when AI response content contained markdown code blocks
 - [x] **Context selection UI refactor** - Replaced radio buttons with link depth slider (0-3) and independent "Same Folder" checkbox. BFS traversal for multi-depth links where excluded folders act as walls.
+- [x] **Agentic mode exploration improvements** - Complete rewrite of context agent:
+  - Running selection approach (`update_selection` tool) instead of fallback scoring
+  - New tools: `search_keyword`, `search_task_relevant`, `get_links_recursive`
+  - Improved system prompt with multi-hop exploration guidance
+  - Default iterations increased to 3, slider range 2-5
+  - Parallel tool calls enabled for efficiency
+  - `agenticKeywordLimit` setting (3-20) for keyword search results
 
 ### Security & Validation
 - [ ] Audit prompt injection defenses (notes treated as data, not instructions)
@@ -195,10 +202,44 @@ src/
   types.ts           - Shared type definitions
   ai/
     context.ts       - Context utilities (addLineNumbers)
+    contextAgent.ts  - Agentic mode Phase 1: vault exploration agent
     prompts.ts       - Prompt constants and builders
     validation.ts    - Edit validation (computeNewContent, determineEditType, escapeRegex)
+    semantic.ts      - Embedding generation and semantic search
   edits/
     diff.ts          - Diff utilities (computeDiff, longestCommonSubsequence)
 styles.css           - Widget and view styling
 manifest.json        - Plugin metadata
 ```
+
+## Agentic Mode (Context Agent)
+
+The agentic mode uses a two-phase approach:
+
+### Phase 1: Context Agent (`contextAgent.ts`)
+An AI agent that explores the vault to find relevant notes for the user's task.
+
+**Tools available to the agent:**
+- `update_selection` - Maintains running selection with reasoning + confidence level
+- `list_notes` - List notes with previews (filterable by folder)
+- `search_keyword` - Fast keyword search with priority: title > heading > content
+- `search_semantic` - Embedding-based semantic similarity search
+- `search_task_relevant` - Task-aware semantic search (combines task + current note context)
+- `fetch_note` - Get full content of a specific note
+- `get_links` - Get direct links (in/out/both) from a note
+- `get_links_recursive` - BFS traversal for multi-hop link exploration (depth 1-3)
+
+**Running Selection Pattern:**
+- Agent calls `update_selection()` after each exploration step
+- Selection includes: selectedPaths, reasoning, confidence ('exploring'|'confident'|'done')
+- If agent sets confidence: 'done', exploration ends early
+- On timeout: uses the last selection (never falls back to arbitrary scoring)
+
+**Settings:**
+- `agenticMaxIterations` (2-5, default 3): Max exploration rounds
+- `agenticMaxNotes` (3-20, default 10): Max notes to select
+- `agenticKeywordLimit` (3-20, default 10): Max keyword search results
+- `agenticScoutModel`: Model for exploration (default: same as main model)
+
+### Phase 2: Task Agent
+Uses the context gathered in Phase 1 to execute the actual task (Q&A or Edit mode).

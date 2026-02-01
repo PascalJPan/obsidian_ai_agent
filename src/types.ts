@@ -7,7 +7,7 @@ import { TFile } from 'obsidian';
 // Type definitions
 export type ContextScope = 'current' | 'linked' | 'folder';  // Legacy - kept for backwards compatibility
 export type EditableScope = 'current' | 'linked' | 'context';
-export type Mode = 'qa' | 'edit';
+export type Mode = 'qa' | 'edit' | 'agentic';
 
 // New context scope configuration
 export type LinkDepth = 0 | 1 | 2 | 3;
@@ -95,6 +95,54 @@ export interface InlineEdit {
 	before: string;
 	after: string;
 	file?: string;
+}
+
+// Agentic mode types
+export type AgenticSubMode = 'qa' | 'edit';
+
+export interface AgenticModeConfig {
+	scoutModel: string;       // Model for Phase 1 exploration
+	maxIterations: number;    // 1-3, max tool-calling rounds
+	maxNotes: number;         // 3-20, max notes context agent can select
+}
+
+// Context agent tool call types
+export interface ContextAgentToolCall {
+	name: string;
+	arguments: Record<string, unknown>;
+}
+
+export interface ContextAgentResult {
+	selectedPaths: string[];
+	reasoning: string;
+	toolCalls: ContextAgentToolCall[];  // For progress display
+}
+
+// Progress event for live UI updates
+export interface AgentProgressEvent {
+	type: 'tool_call' | 'iteration' | 'complete';
+	message: string;
+	detail?: string;
+}
+
+// Note preview for context agent
+export interface NotePreview {
+	path: string;
+	name: string;
+	preview: string;    // First ~200 chars
+}
+
+// Semantic search result for context agent
+export interface SemanticSearchResult {
+	path: string;
+	score: number;
+	heading: string;
+}
+
+// Link info for context agent
+export interface LinkInfo {
+	path: string;
+	direction: 'outgoing' | 'backlink';
 }
 
 // Chat message interface with rich context for AI memory
