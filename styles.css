@@ -1,9 +1,9 @@
 /*
- * AI Assistant Plugin Styles
+ * ObsidianAgent Plugin Styles
  */
 
 /* ===================================
-   AI Assistant Sidebar View - Chat Layout
+   ObsidianAgent Sidebar View - Chat Layout
    =================================== */
 
 .ai-assistant-view {
@@ -25,6 +25,37 @@
 	user-select: text;
 	-webkit-user-select: text;
 	background: var(--background-primary);
+	border-radius: 0 0 12px 12px;
+}
+
+/* Chat header with clear button */
+.ai-chat-header {
+	display: flex;
+	justify-content: flex-start;
+	padding: 8px 12px 0 12px;
+	flex-shrink: 0;
+}
+
+.ai-assistant-clear-btn {
+	background: none;
+	border: none;
+	padding: 4px;
+	cursor: pointer;
+	color: var(--text-muted);
+	border-radius: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.ai-assistant-clear-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ai-assistant-clear-btn svg {
+	width: 14px;
+	height: 14px;
 }
 
 .ai-chat-welcome {
@@ -246,21 +277,33 @@
 	50% { opacity: 1; }
 }
 
-/* Inline refresh button */
-.ai-assistant-refresh-inline {
-	background: none;
-	border: none;
-	padding: 2px 6px;
-	cursor: pointer;
-	font-size: 0.9em;
+/* Context preview button inside toggle */
+.ai-assistant-context-preview-btn {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 8px 10px;
+	margin-bottom: 10px;
+	background: var(--background-primary);
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 6px;
 	color: var(--text-muted);
-	border-radius: 4px;
-	margin-left: 4px;
+	font-size: 0.85em;
+	cursor: pointer;
+	transition: all 0.15s ease;
 }
 
-.ai-assistant-refresh-inline:hover {
-	background: var(--background-modifier-hover);
+.ai-assistant-context-preview-btn:hover {
+	border-color: var(--interactive-accent);
 	color: var(--text-normal);
+	background: var(--background-secondary);
+}
+
+.ai-assistant-context-preview-btn svg {
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
 }
 
 /* Collapsible toggles */
@@ -494,14 +537,6 @@
 	color: var(--text-accent);
 }
 
-.ai-edit-label {
-	font-size: 0.8em;
-	font-weight: 500;
-	color: var(--text-muted);
-	display: block;
-	margin-bottom: 4px;
-}
-
 .ai-edit-before {
 	background: rgba(255, 100, 100, 0.15);
 	border-left: 3px solid var(--text-error);
@@ -510,12 +545,12 @@
 	margin-bottom: 8px;
 }
 
-.ai-edit-before .ai-edit-content {
+/* Strikethrough text in before section */
+.ai-edit-before p,
+.ai-edit-before li,
+.ai-edit-before span {
 	text-decoration: line-through;
 	opacity: 0.8;
-	font-family: var(--font-monospace);
-	font-size: 0.9em;
-	white-space: pre-wrap;
 }
 
 .ai-edit-after {
@@ -526,10 +561,44 @@
 	margin-bottom: 8px;
 }
 
-.ai-edit-after .ai-edit-content {
-	font-family: var(--font-monospace);
+/* Reset margins on markdown elements inside edit sections */
+.ai-edit-before > *,
+.ai-edit-after > * {
+	margin: 0 0 0.5em 0;
+}
+
+.ai-edit-before > *:last-child,
+.ai-edit-after > *:last-child {
+	margin-bottom: 0;
+}
+
+/* Headings in edit sections */
+.ai-edit-before h1, .ai-edit-before h2, .ai-edit-before h3,
+.ai-edit-before h4, .ai-edit-before h5, .ai-edit-before h6,
+.ai-edit-after h1, .ai-edit-after h2, .ai-edit-after h3,
+.ai-edit-after h4, .ai-edit-after h5, .ai-edit-after h6 {
+	margin: 0 0 0.3em 0;
+	font-size: 1em;
+}
+
+/* Lists in edit sections */
+.ai-edit-before ul, .ai-edit-before ol,
+.ai-edit-after ul, .ai-edit-after ol {
+	margin: 0 0 0.5em 0;
+	padding-left: 1.5em;
+}
+
+/* Code blocks in edit sections */
+.ai-edit-before pre, .ai-edit-after pre {
+	margin: 0.5em 0;
+	padding: 0.5em;
+	background: var(--background-primary);
+	border-radius: 4px;
+	overflow-x: auto;
+}
+
+.ai-edit-before code, .ai-edit-after code {
 	font-size: 0.9em;
-	white-space: pre-wrap;
 }
 
 .ai-edit-actions {
@@ -1176,6 +1245,21 @@ button:disabled {
 	color: var(--text-muted);
 }
 
+.context-preview-aliases {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-left: 6px;
+	font-style: italic;
+}
+
+.context-preview-description {
+	font-size: 0.75em;
+	color: var(--text-faint);
+	margin-left: 16px;
+	margin-top: 2px;
+	line-height: 1.3;
+}
+
 .context-preview-buttons {
 	display: flex;
 	justify-content: flex-end;
@@ -1435,4 +1519,253 @@ button:disabled {
 
 .ai-agent-progress-container.completed .ai-agent-progress-title {
 	color: var(--text-success, #4ade80);
+}
+
+/* ===================================
+   Token Warning Modal
+   =================================== */
+
+.token-warning-modal {
+	padding: 20px;
+	max-width: 400px;
+	text-align: center;
+}
+
+.token-warning-modal h2 {
+	margin-top: 0;
+	margin-bottom: 12px;
+}
+
+.token-warning-icon {
+	font-size: 2.5em;
+	margin-bottom: 12px;
+}
+
+.token-warning-modal p {
+	margin-bottom: 12px;
+	line-height: 1.5;
+}
+
+.token-warning-note {
+	font-size: 0.9em;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.token-warning-buttons {
+	display: flex;
+	justify-content: center;
+	gap: 12px;
+	margin-top: 20px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.token-warning-buttons button {
+	padding: 8px 20px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-weight: 500;
+}
+
+.token-warning-buttons button.mod-warning {
+	background: var(--text-warning);
+	color: var(--background-primary);
+	border: none;
+}
+
+.token-warning-buttons button.mod-warning:hover {
+	opacity: 0.9;
+}
+
+/* ===================================
+   Manually Added Notes Section
+   =================================== */
+
+.ai-assistant-manual-notes-section {
+	margin-top: 8px;
+}
+
+.ai-assistant-manual-notes-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 8px;
+}
+
+.ai-assistant-manual-notes-empty {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	font-style: italic;
+	padding: 4px 0;
+}
+
+.ai-assistant-manual-note-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 8px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	font-size: 0.85em;
+}
+
+.ai-assistant-manual-note-name {
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+	margin-right: 8px;
+}
+
+.ai-assistant-manual-note-remove {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 2px 6px;
+	font-size: 1.1em;
+	line-height: 1;
+	border-radius: 3px;
+	flex-shrink: 0;
+}
+
+.ai-assistant-manual-note-remove:hover {
+	background: rgba(255, 100, 100, 0.2);
+	color: var(--text-error);
+}
+
+.ai-assistant-add-note-btn {
+	background: var(--background-primary);
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 4px;
+	padding: 6px 12px;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	cursor: pointer;
+	width: 100%;
+	text-align: center;
+	transition: all 0.15s ease;
+}
+
+.ai-assistant-add-note-btn:hover {
+	border-color: var(--interactive-accent);
+	color: var(--interactive-accent);
+	background: var(--background-secondary);
+}
+
+/* ===================================
+   Settings Page - Full-width Textareas
+   =================================== */
+
+.ai-settings-textarea-container {
+	margin-top: 16px;
+	margin-bottom: 16px;
+}
+
+.ai-settings-textarea-container .setting-item-name {
+	font-weight: 500;
+	margin-bottom: 4px;
+}
+
+.ai-settings-textarea-container .setting-item-description {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	margin-bottom: 8px;
+}
+
+.ai-settings-textarea-container textarea {
+	width: 100%;
+	min-height: 80px;
+	resize: vertical;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-family: inherit;
+	font-size: 0.95em;
+	line-height: 1.4;
+}
+
+.ai-settings-textarea-container textarea:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.ai-settings-textarea-container textarea::placeholder {
+	color: var(--text-muted);
+}
+
+/* ===================================
+   Settings Page - Collapsible Sections
+   =================================== */
+
+.ai-settings-collapsible {
+	margin-top: 12px;
+	margin-bottom: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.ai-settings-collapsible summary {
+	padding: 12px 16px;
+	cursor: pointer;
+	font-weight: 500;
+	font-size: 0.95em;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	user-select: none;
+	border-radius: 8px;
+}
+
+.ai-settings-collapsible summary:hover {
+	background: var(--background-modifier-hover);
+}
+
+.ai-settings-collapsible summary::marker,
+.ai-settings-collapsible summary::-webkit-details-marker {
+	display: none;
+}
+
+.ai-settings-collapsible summary::before {
+	content: '\25B6';
+	font-size: 0.7em;
+	transition: transform 0.2s ease;
+}
+
+.ai-settings-collapsible[open] summary::before {
+	transform: rotate(90deg);
+}
+
+.ai-settings-collapsible[open] summary {
+	border-radius: 8px 8px 0 0;
+}
+
+.ai-settings-collapsible-content {
+	padding: 12px 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-settings-collapsible-content .setting-item {
+	border-top: none;
+	padding-top: 8px;
+	padding-bottom: 8px;
+}
+
+/* ===================================
+   Settings Warning Message
+   =================================== */
+
+.ai-settings-warning {
+	color: var(--text-error);
+	font-size: 0.85em;
+	margin-top: 4px;
+	padding: 4px 8px;
+	background: var(--background-modifier-error);
+	border-radius: 4px;
 }

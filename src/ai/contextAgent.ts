@@ -23,6 +23,7 @@ interface SelectionState {
 	selectedPaths: string[];
 	reasoning: string;
 	confidence: 'exploring' | 'confident' | 'done';
+	recommendedMode?: 'qa' | 'edit';  // Agent's recommended mode for Phase 2
 }
 
 // Tool definitions for OpenAI function calling
@@ -31,7 +32,7 @@ const CONTEXT_AGENT_TOOLS = [
 		type: 'function' as const,
 		function: {
 			name: 'update_selection',
-			description: 'Update your current selection of relevant notes. CRITICAL: Call this after each exploration step to save your progress. Set confidence to "done" when you have enough context.',
+			description: 'Update your current selection of relevant notes. CRITICAL: Call this after each exploration step to save your progress. Set confidence to "done" when you have enough context. When done, also set recommendedMode based on the task.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -48,6 +49,11 @@ const CONTEXT_AGENT_TOOLS = [
 						type: 'string',
 						enum: ['exploring', 'confident', 'done'],
 						description: '"exploring" = still looking, "confident" = good selection but may continue, "done" = finished exploring'
+					},
+					recommendedMode: {
+						type: 'string',
+						enum: ['qa', 'edit'],
+						description: 'When confidence is "done": "qa" if user is asking a question/seeking info, "edit" if user wants to modify/add/delete note content'
 					}
 				},
 				required: ['selectedPaths', 'reasoning', 'confidence']
@@ -211,7 +217,7 @@ function buildContextAgentSystemPrompt(maxNotes: number): string {
 1. Analyze the task - what kind of information would help?
 2. Explore using tools (you can call up to 2 tools per turn for efficiency)
 3. After EACH exploration step, call update_selection() with your current best picks
-4. When confident you have enough context, set confidence: "done"
+4. When confident you have enough context, set confidence: "done" AND set recommendedMode
 
 ## AVAILABLE SEARCH STRATEGIES
 - search_keyword("term") - Fast exact search, prioritizes title > heading > content matches
@@ -230,12 +236,25 @@ function buildContextAgentSystemPrompt(maxNotes: number): string {
 2. get_links_recursive("Projects.md", depth=2) → discovers "Roadmap.md", "Tasks.md"
 3. These linked notes may be more relevant than direct search results!
 
+## MODE SELECTION (when setting confidence: "done")
+Analyze the user's task to determine the appropriate mode:
+- Use "qa" mode if the user is:
+  - Asking a question ("What is...", "How does...", "Why...")
+  - Seeking information or explanations
+  - Requesting a summary or analysis
+- Use "edit" mode if the user wants to:
+  - Modify, update, or change existing content
+  - Add new content to notes
+  - Delete or remove content
+  - Create new notes
+  - Reorganize or refactor notes
+
 ## CRITICAL RULES
 - Call update_selection() after EACH exploration step with your reasoning
 - This ensures we always have your best picks even if exploration is interrupted
 - Select up to ${maxNotes} notes maximum. Quality over quantity.
 - Include the current note path if it's relevant
-- When done, set confidence: "done" to finish exploration`;
+- When done, set confidence: "done" AND recommendedMode to finish exploration`;
 }
 
 interface ToolHandlerContext {
@@ -862,8 +881,9 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 					const selectedPaths = (args.selectedPaths as string[]) || [];
 					const reasoning = (args.reasoning as string) || 'No reasoning provided';
 					const confidence = (args.confidence as 'exploring' | 'confident' | 'done') || 'exploring';
+					const recommendedMode = args.recommendedMode as 'qa' | 'edit' | undefined;
 
-					lastSelection = { selectedPaths, reasoning, confidence };
+					lastSelection = { selectedPaths, reasoning, confidence, recommendedMode };
 
 					onProgress({
 						type: 'tool_call',
@@ -882,7 +902,8 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 						content: JSON.stringify({
 							status: 'selection_updated',
 							noteCount: selectedPaths.length,
-							confidence
+							confidence,
+							recommendedMode
 						})
 					});
 				} else {
@@ -919,7 +940,8 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 		result = {
 			selectedPaths: finalPaths,
 			reasoning: lastSelection.reasoning,
-			toolCalls: allToolCalls
+			toolCalls: allToolCalls,
+			recommendedMode: lastSelection.recommendedMode
 		};
 
 		onProgress({

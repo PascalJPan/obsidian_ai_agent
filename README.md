@@ -1,4 +1,4 @@
-# Obsidian AI Assistant
+# ObsidianAgent
 
 An agentic AI assistant for Obsidian that helps you build and maintain your second brain.
 
@@ -40,6 +40,12 @@ An AI scout agent explores your vault autonomously to find the best context for 
 - Exclude sensitive folders entirely
 - **Hard enforcement**: Rules are validated server-side, not just suggested to AI
 
+**Smart Token Management**
+- Set a token limit for context sent to the AI
+- When limit is exceeded, notes are automatically trimmed by priority
+- Priority order: manual notes removed first → semantic → folder → linked → current note (never removed)
+- Toast notification when notes are removed from context
+
 **Model Selection**
 - Choose your preferred OpenAI model (gpt-4o-mini, gpt-4o, gpt-4-turbo, o1, etc.)
 - Balance cost, speed, and capability for your workflow
@@ -58,7 +64,7 @@ An AI scout agent explores your vault autonomously to find the best context for 
 
 ## How It Works
 
-1. Open the AI Assistant panel (brain icon in the ribbon)
+1. Open the ObsidianAgent panel (brain icon in the ribbon)
 2. Type your request
 3. In Edit mode, the AI proposes changes as pending edits
 4. Review the changes inline in your notes

@@ -1,4 +1,4 @@
-# Obsidian AI Assistant Plugin — Architecture
+# ObsidianAgent — Architecture
 
 ## Entry Point
 - `src/main.ts`

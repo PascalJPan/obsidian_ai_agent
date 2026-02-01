@@ -1,19 +1,20 @@
 /**
- * Structured logging utility for AI Assistant Plugin
+ * Structured logging utility for ObsidianAgent Plugin
  *
  * Provides categorized logging with timestamps.
  * Errors are always logged; log/warn are gated by debugEnabled().
  */
 
 export type LogCategory =
-	| 'CONTEXT'   // Context building operations
-	| 'INDEX'     // Backlink/link indexing and BFS traversal
-	| 'VALIDATE'  // Edit validation
-	| 'FILTER'    // Edit filtering by rules
-	| 'SEMANTIC'  // Semantic search operations
-	| 'API'       // API calls
-	| 'EDIT'      // Edit insertion and resolution
-	| 'PARSE';    // Response parsing
+	| 'CONTEXT'      // Context building operations
+	| 'INDEX'        // Backlink/link indexing and BFS traversal
+	| 'VALIDATE'     // Edit validation
+	| 'FILTER'       // Edit filtering by rules
+	| 'SEMANTIC'     // Semantic search operations
+	| 'API'          // API calls
+	| 'EDIT'         // Edit insertion and resolution
+	| 'PARSE'        // Response parsing
+	| 'TOKEN_LIMIT'; // Token limit enforcement
 
 export interface Logger {
 	log: (category: LogCategory, message: string, data?: unknown) => void;
@@ -52,7 +53,7 @@ export function createLogger(debugEnabled: () => boolean): Logger {
 	const formatMessage = (category: LogCategory, message: string, data?: unknown): string => {
 		const timestamp = getTimestamp();
 		const dataStr = formatData(data);
-		const base = `[${timestamp}] [AI Assistant] [${category}] ${message}`;
+		const base = `[${timestamp}] [ObsidianAgent] [${category}] ${message}`;
 		return dataStr ? `${base}\n${dataStr}` : base;
 	};
 

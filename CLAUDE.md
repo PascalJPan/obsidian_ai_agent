@@ -1,4 +1,4 @@
-# AI Assistant Plugin - Developer Reference
+# ObsidianAgent - Developer Reference
 
 ## TODO
 
@@ -17,6 +17,14 @@
   - Default iterations increased to 3, slider range 2-5
   - Parallel tool calls enabled for efficiency
   - `agenticKeywordLimit` setting (3-20) for keyword search results
+- [x] **Token limit enforcement** - Renamed `tokenWarningThreshold` to `answerEditTokenLimit`:
+  - Now a hard limit, not just a warning
+  - Removes notes by priority when limit exceeded (manual → semantic → folder → linked → current)
+  - Shows toast notification when notes are removed
+  - Minimum token limit validation (3000)
+- [x] **Default link depth** - Changed from 1 to 2
+- [x] **Live sync settings** - Settings changes now immediately update view sliders
+- [x] **Plugin rename** - Renamed from "AI Assistant" / "sample-plugin" to "ObsidianAgent" throughout codebase
 
 ### Security & Validation
 - [ ] Audit prompt injection defenses (notes treated as data, not instructions)
@@ -52,10 +60,24 @@
   - Max notes selected
 - [ ] **Remove sub-mode toggle in agentic mode**: Instead of Q&A/Edit toggle in agentic mode, let the scout agent's first iteration decide whether to use edit or Q&A mode for Phase 2
 - [ ] **Settings layout cleanup**: Reorganize settings for better intuitiveness without changing functionality
-- [ ] **Token warning threshold behavior**:
-  - In non-agentic mode: show as a pop-up warning before sending
-  - In agentic mode: hard threshold - stop iterations if exceeded
-  - Currently appears to not work at all (setting exists but not enforced)
+- [x] ~~**Token warning threshold behavior**~~ - Replaced with hard token limit enforcement (see Completed section)
+
+### Agentic Mode Enhancements
+- [ ] **Web search tool** - Add web search capability to agentic AI
+- [ ] **Vault metadata tool** - Single tool with 3 modes for agent to query:
+  - Get folder structure of vault
+  - Get all tags used in vault
+  - Get all note names in vault
+- [ ] **Open note tool** - Agent can open/navigate to a specific note it has seen or thinks exists
+- [ ] **Agentic iterations slider** - Increase max to 10, change default to 5
+- [ ] **Expected tokens display** - Show max expected tokens next to scout agent settings:
+  - Formula: (max tokens per iteration × exploration rounds) + answer/edit token limit
+- [ ] **Agent note switching** - Agent can change which note user is viewing (switch to another note)
+- [ ] **Max notes to select** - Increase max from 20 to 50 (default stays at 20)
+- [ ] **Edit rules defaults** - Change defaults:
+  - Editable scope: all context notes (instead of current only)
+  - All capabilities enabled by default (canAdd, canDelete, canCreate)
+- [ ] **Send button centering** - Center send button vertically in the middle of the chat input box height
 
 ### Future Features
 - [ ] Support for other AI providers (Anthropic, local models)
