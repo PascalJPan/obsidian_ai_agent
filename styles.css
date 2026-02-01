@@ -1260,6 +1260,125 @@ button:disabled {
 	font-size: 0.9em;
 }
 
+/* Actions toggle (collapsible exploration steps) */
+.ai-agent-actions-toggle {
+	margin-top: 8px;
+}
+
+.ai-agent-actions-toggle summary {
+	cursor: pointer;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	user-select: none;
+}
+
+.ai-agent-actions-toggle summary:hover {
+	color: var(--text-normal);
+}
+
+.ai-agent-actions-toggle[open] summary {
+	margin-bottom: 6px;
+}
+
+.ai-agent-steps-container {
+	padding-left: 4px;
+}
+
+/* Round separators */
+.ai-agent-round-header {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	font-weight: 500;
+	margin-bottom: 4px;
+	padding: 2px 0;
+}
+
+.ai-agent-round-separator {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 10px 0 6px 0;
+}
+
+.ai-agent-round-separator-line {
+	flex: 1;
+	height: 1px;
+	background: var(--background-modifier-border);
+}
+
+.ai-agent-round-separator-text {
+	font-size: 0.75em;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+/* Selected notes toggle */
+.ai-agent-notes-toggle {
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-agent-notes-toggle summary {
+	cursor: pointer;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	user-select: none;
+}
+
+.ai-agent-notes-toggle summary:hover {
+	color: var(--text-normal);
+}
+
+.ai-agent-notes-toggle[open] summary {
+	margin-bottom: 8px;
+}
+
+.ai-agent-notes-content {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	padding: 8px 10px;
+	background: var(--background-primary);
+	border-radius: 4px;
+}
+
+.ai-agent-notes-list {
+	margin: 0;
+	padding-left: 18px;
+	line-height: 1.6;
+}
+
+.ai-agent-notes-list li {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.ai-agent-note-path {
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+}
+
+.ai-agent-note-link {
+	cursor: pointer;
+	color: var(--text-muted);
+	opacity: 0.6;
+	transition: opacity 0.15s, color 0.15s;
+	display: inline-flex;
+	align-items: center;
+}
+
+.ai-agent-note-link:hover {
+	opacity: 1;
+	color: var(--interactive-accent);
+}
+
+.ai-agent-note-link svg {
+	width: 14px;
+	height: 14px;
+}
+
 /* Reasoning toggle */
 .ai-agent-reasoning-toggle {
 	margin-top: 10px;
@@ -1291,8 +1410,10 @@ button:disabled {
 	border-radius: 4px;
 }
 
-/* Animation for progress steps appearing */
-.ai-agent-progress-step {
+/* Animation for progress steps and separators appearing */
+.ai-agent-progress-step,
+.ai-agent-round-header,
+.ai-agent-round-separator {
 	animation: fadeInStep 0.2s ease-in;
 }
 

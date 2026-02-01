@@ -42,6 +42,21 @@
   - Checkbox for whether all vault tags are visible to AI
 - [ ] Consider saved context presets/profiles
 
+### UI/UX Improvements
+- [ ] **Mode-specific toggle visibility**:
+  - Hide context notes toggle in agentic mode (not used - agent selects context dynamically)
+  - Hide edit rules toggle in Q&A mode (not used - no edits happen)
+- [ ] **Scout Agent settings panel**: In agentic mode, add a "Scout Agent" toggle/section with sliders:
+  - Max exploration rounds
+  - Max send tokens per round
+  - Max notes selected
+- [ ] **Remove sub-mode toggle in agentic mode**: Instead of Q&A/Edit toggle in agentic mode, let the scout agent's first iteration decide whether to use edit or Q&A mode for Phase 2
+- [ ] **Settings layout cleanup**: Reorganize settings for better intuitiveness without changing functionality
+- [ ] **Token warning threshold behavior**:
+  - In non-agentic mode: show as a pop-up warning before sending
+  - In agentic mode: hard threshold - stop iterations if exceeded
+  - Currently appears to not work at all (setting exists but not enforced)
+
 ### Future Features
 - [ ] Support for other AI providers (Anthropic, local models)
 - [ ] Streaming responses

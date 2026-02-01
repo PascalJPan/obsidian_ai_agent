@@ -368,10 +368,11 @@ async function handleSearchSemantic(
 			heading: m.heading
 		}));
 
+		const previewCount = Math.min(5, results.length);
 		onProgress({
 			type: 'tool_call',
 			message: `Found ${results.length} semantic matches`,
-			detail: results.slice(0, 3).map(r => r.path.split('/').pop()).join(', ')
+			detail: results.slice(0, previewCount).map(r => r.path.split('/').pop()).join(', ') + (results.length > previewCount ? ', ...' : '')
 		});
 
 		return JSON.stringify({ results });
@@ -484,10 +485,11 @@ async function handleGetLinks(
 		}
 	}
 
+	const previewCount = Math.min(5, links.length);
 	onProgress({
 		type: 'tool_call',
 		message: `Found ${links.length} links`,
-		detail: links.slice(0, 3).map(l => l.path.split('/').pop()).join(', ')
+		detail: links.slice(0, previewCount).map(l => l.path.split('/').pop()).join(', ') + (links.length > previewCount ? ', ...' : '')
 	});
 
 	return JSON.stringify({ links });
@@ -577,10 +579,11 @@ async function handleSearchKeyword(
 		preview: r.preview
 	}));
 
+	const keywordPreviewCount = Math.min(5, limitedResults.length);
 	onProgress({
 		type: 'tool_call',
 		message: `Found ${limitedResults.length} keyword matches`,
-		detail: limitedResults.slice(0, 3).map(r => `${r.matchType}: ${r.path.split('/').pop()}`).join(', ')
+		detail: limitedResults.slice(0, keywordPreviewCount).map(r => `${r.matchType}: ${r.path.split('/').pop()}`).join(', ') + (limitedResults.length > keywordPreviewCount ? ', ...' : '')
 	});
 
 	return JSON.stringify({ results: limitedResults });
@@ -641,10 +644,11 @@ async function handleSearchTaskRelevant(
 			heading: m.heading
 		}));
 
+		const taskPreviewCount = Math.min(5, results.length);
 		onProgress({
 			type: 'tool_call',
 			message: `Found ${results.length} task-relevant matches`,
-			detail: results.slice(0, 3).map(r => r.path.split('/').pop()).join(', ')
+			detail: results.slice(0, taskPreviewCount).map(r => r.path.split('/').pop()).join(', ') + (results.length > taskPreviewCount ? ', ...' : '')
 		});
 
 		return JSON.stringify({ results });
