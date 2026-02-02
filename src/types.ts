@@ -61,6 +61,7 @@ export interface AICapabilities {
 	canAdd: boolean;
 	canDelete: boolean;
 	canCreate: boolean;
+	canNavigate: boolean;  // Can open notes in new tabs
 }
 
 // Interfaces for JSON-based multi-note editing
@@ -113,8 +114,23 @@ export type AgenticSubMode = 'qa' | 'edit';
 
 export interface AgenticModeConfig {
 	scoutModel: string;       // Model for Phase 1 exploration
-	maxIterations: number;    // 1-3, max tool-calling rounds
-	maxNotes: number;         // 3-20, max notes context agent can select
+	maxIterations: number;    // 1-10, max tool-calling rounds
+	maxNotes: number;         // 3-50, max notes context agent can select
+}
+
+// Scout agent tool configuration
+export interface ScoutToolConfig {
+	listNotes: boolean;
+	searchKeyword: boolean;
+	searchSemantic: boolean;
+	searchTaskRelevant: boolean;
+	getLinks: boolean;
+	getLinksRecursive: boolean;
+	viewAllNotes: boolean;    // View all note names with frontmatter
+	exploreVault: boolean;    // Explore folders and tags
+	keywordLimit: number;
+	semanticLimit: number;
+	listNotesLimit: number;
 }
 
 // Context agent tool call types

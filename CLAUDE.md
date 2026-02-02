@@ -26,63 +26,26 @@
 - [x] **Live sync settings** - Settings changes now immediately update view sliders
 - [x] **Plugin rename** - Renamed from "AI Assistant" / "sample-plugin" to "ObsidianAgent" throughout codebase
 
-### Security & Validation
-- [ ] Audit prompt injection defenses (notes treated as data, not instructions)
-- [ ] Review excluded folder enforcement
-- [ ] Validate API key handling security
-
-### Prompt Optimization
-- [ ] Analyze prompt token efficiency
-- [ ] Test prompt clarity with different models
-- [ ] Consider prompt caching strategies
-
-### Observability & Debugging
-- [ ] Add structured logging for edit pipeline
-- [ ] Consider telemetry for edit success/failure rates
-
 ### Context Selection Improvements
-- [x] **Link depth slider** - 0-3 depth slider for multi-hop link traversal (BFS algorithm)
-- [x] **Same folder checkbox** - Independent, additive folder inclusion
-- [x] **Excluded folders as walls** - Excluded folders block traversal, not just exclusion
-- [ ] **Versatile context selection** - Additional options:
-  - View all note names with alias/description fields from YAML frontmatter
-  - Add notes individually to context (picker UI)
-  - Checkbox for whether all vault tags are visible to AI
+- [x] **Add notes individually** - Picker UI implemented for manually adding notes to context
+- [ ] **Vault tags visibility** - Checkbox for whether all vault tags are visible to AI
 - [ ] Consider saved context presets/profiles
 
 ### UI/UX Improvements
-- [ ] **Mode-specific toggle visibility**:
-  - Hide context notes toggle in agentic mode (not used - agent selects context dynamically)
-  - Hide edit rules toggle in Q&A mode (not used - no edits happen)
-- [ ] **Scout Agent settings panel**: In agentic mode, add a "Scout Agent" toggle/section with sliders:
-  - Max exploration rounds
-  - Max send tokens per round
-  - Max notes selected
-- [ ] **Remove sub-mode toggle in agentic mode**: Instead of Q&A/Edit toggle in agentic mode, let the scout agent's first iteration decide whether to use edit or Q&A mode for Phase 2
-- [ ] **Settings layout cleanup**: Reorganize settings for better intuitiveness without changing functionality
-- [x] ~~**Token warning threshold behavior**~~ - Replaced with hard token limit enforcement (see Completed section)
+- [x] **Move edit options to settings** - Moved edit rules toggle from chat tab to Obsidian settings panel
 
 ### Agentic Mode Enhancements
 - [ ] **Web search tool** - Add web search capability to agentic AI
-- [ ] **Vault metadata tool** - Single tool with 3 modes for agent to query:
-  - Get folder structure of vault
-  - Get all tags used in vault
-  - Get all note names in vault
-- [ ] **Open note tool** - Agent can open/navigate to a specific note it has seen or thinks exists
-- [ ] **Agentic iterations slider** - Increase max to 10, change default to 5
-- [ ] **Expected tokens display** - Show max expected tokens next to scout agent settings:
-  - Formula: (max tokens per iteration × exploration rounds) + answer/edit token limit
-- [ ] **Agent note switching** - Agent can change which note user is viewing (switch to another note)
-- [ ] **Max notes to select** - Increase max from 20 to 50 (default stays at 20)
-- [ ] **Edit rules defaults** - Change defaults:
-  - Editable scope: all context notes (instead of current only)
-  - All capabilities enabled by default (canAdd, canDelete, canCreate)
-- [ ] **Send button centering** - Center send button vertically in the middle of the chat input box height
-
-### Future Features
-- [ ] Support for other AI providers (Anthropic, local models)
-- [ ] Streaming responses
-- [ ] Edit preview modal before insertion
+- [x] **View all note names** - `view_all_notes` tool lists all note names with alias/description from YAML frontmatter
+- [x] **Vault exploration tool** - `explore_vault` tool for listing folder contents or finding notes by tag
+- [x] **Open note capability** - `canNavigate` capability allows AI to open notes in new tabs via `open` position
+- [x] **Agentic iterations slider** - Increased max to 10, changed default to 5
+- [x] **Expected tokens display** - Shows max expected tokens in scout agent settings
+- [x] **Max notes to select** - Increased max from 20 to 50 (default stays at 20)
+- [x] **Edit rules defaults** - Changed defaults: scope=context, all capabilities enabled
+- [x] **Send button centering** - Centered send button vertically in chat input box
+- [x] **Scout agent tool configuration** - Settings UI for enabling/disabling individual scout tools
+- [x] **Vault tags visibility** - Checkbox for showing all vault tags to AI
 
 ## Architecture Overview
 
@@ -113,6 +76,7 @@ This is an Obsidian plugin that provides an agentic AI assistant for note editin
 - `canAdd`: Allow line insertions
 - `canDelete`: Allow replacements and deletions
 - `canCreate`: Allow new file creation
+- `canNavigate`: Allow opening notes in new tabs (executes immediately, not as pending edit)
 
 ### Settings (`MyPluginSettings`)
 - `aiModel`: OpenAI model to use (gpt-4o-mini, gpt-4o, gpt-4-turbo, etc.)
@@ -140,6 +104,7 @@ Wraps EditInstruction with resolved file, current/new content, and error state.
 - `replace:N` or `replace:N-M` - Replace line(s)
 - `delete:N` or `delete:N-M` - Delete line(s)
 - `create` - Create new file
+- `open` - Open note in new tab (navigation, no content change)
 
 ## Key Methods
 
@@ -265,6 +230,8 @@ An AI agent that explores the vault to find relevant notes for the user's task.
 - `fetch_note` - Get full content of a specific note
 - `get_links` - Get direct links (in/out/both) from a note
 - `get_links_recursive` - BFS traversal for multi-hop link exploration (depth 1-3)
+- `view_all_notes` - List ALL note names with aliases/descriptions from YAML frontmatter
+- `explore_vault` - Explore vault structure: list folder contents or find notes by tag
 
 **Running Selection Pattern:**
 - Agent calls `update_selection()` after each exploration step

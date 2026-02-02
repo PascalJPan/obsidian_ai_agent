@@ -39,7 +39,8 @@ import {
 	// AgenticSubMode removed - scout agent decides mode automatically
 	AgenticModeConfig,
 	AgentProgressEvent,
-	ContextAgentResult
+	ContextAgentResult,
+	ScoutToolConfig
 } from './src/types';
 import { runContextAgent } from './src/ai/contextAgent';
 import {
@@ -93,6 +94,25 @@ interface MyPluginSettings {
 	defaultMaxFolderNotes: number;         // 0-20, default 0
 	defaultSemanticMatchCount: number;     // 0-20, default 0
 	defaultSemanticMinSimilarity: number;  // 0-100, default 50
+	// Default edit rules
+	defaultEditableScope: EditableScope;   // 'current' | 'linked' | 'context'
+	defaultCanAdd: boolean;
+	defaultCanDelete: boolean;
+	defaultCanCreate: boolean;
+	defaultCanNavigate: boolean;           // Can open notes in new tabs
+	// Vault tags visibility
+	showVaultTagsToAI: boolean;
+	// Scout agent tool configuration
+	scoutToolListNotes: boolean;
+	scoutToolSearchKeyword: boolean;
+	scoutToolSearchSemantic: boolean;
+	scoutToolSearchTaskRelevant: boolean;
+	scoutToolGetLinks: boolean;
+	scoutToolGetLinksRecursive: boolean;
+	scoutToolViewAllNotes: boolean;        // View all note names with frontmatter
+	scoutToolExploreVault: boolean;        // Explore folders and tags
+	scoutSemanticLimit: number;            // Max results for semantic search
+	scoutListNotesLimit: number;           // Max results for list_notes
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -109,7 +129,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	showTokenUsage: false,
 	embeddingModel: 'text-embedding-3-small',
 	agenticScoutModel: 'same',
-	agenticMaxIterations: 3,
+	agenticMaxIterations: 5,
 	agenticMaxNotes: 10,
 	agenticKeywordLimit: 10,
 	agenticMaxTokensPerIteration: 10000,
@@ -118,7 +138,26 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	defaultMaxLinkedNotes: 20,
 	defaultMaxFolderNotes: 0,
 	defaultSemanticMatchCount: 0,
-	defaultSemanticMinSimilarity: 50
+	defaultSemanticMinSimilarity: 50,
+	// Default edit rules - all capabilities enabled, context scope
+	defaultEditableScope: 'context',
+	defaultCanAdd: true,
+	defaultCanDelete: true,
+	defaultCanCreate: true,
+	defaultCanNavigate: true,
+	// Vault tags visibility
+	showVaultTagsToAI: false,
+	// Scout agent tool configuration - all enabled by default
+	scoutToolListNotes: true,
+	scoutToolSearchKeyword: true,
+	scoutToolSearchSemantic: true,
+	scoutToolSearchTaskRelevant: true,
+	scoutToolGetLinks: true,
+	scoutToolGetLinksRecursive: true,
+	scoutToolViewAllNotes: true,
+	scoutToolExploreVault: true,
+	scoutSemanticLimit: 10,
+	scoutListNotesLimit: 30
 }
 
 // Type definitions now imported from src/types.ts
@@ -273,7 +312,7 @@ export default class MyPlugin extends Plugin {
 	}
 
 	// Notify all open ObsidianAgent views that settings have changed
-	notifySettingsChanged(changedGroup: 'focused' | 'scout') {
+	notifySettingsChanged(changedGroup: 'focused' | 'scout' | 'editRules') {
 		const leaves = this.app.workspace.getLeavesOfType(AI_ASSISTANT_VIEW_TYPE);
 		for (const leaf of leaves) {
 			const view = leaf.view as AIAssistantView;
@@ -1719,6 +1758,13 @@ export default class MyPlugin extends Plugin {
 				rejectedEdits.push({ file: edit.instruction.file, reason: 'canAdd disabled' });
 				continue;
 			}
+
+			// Check canNavigate
+			if (position === 'open' && !capabilities.canNavigate) {
+				edit.error = 'Opening notes is not allowed (canNavigate disabled)';
+				rejectedEdits.push({ file: edit.instruction.file, reason: 'canNavigate disabled' });
+				continue;
+			}
 		}
 
 		const passedCount = validatedEdits.filter(e => !e.error).length;
@@ -1826,11 +1872,13 @@ class AIAssistantView extends ItemView {
 		semanticMatchCount: 0,
 		semanticMinSimilarity: 50
 	};
-	editableScope: EditableScope = 'current';
+	// Edit rules - initialized from settings in onOpen
+	editableScope: EditableScope = 'context';
 	capabilities: AICapabilities = {
 		canAdd: true,
-		canDelete: false,
-		canCreate: false
+		canDelete: true,
+		canCreate: true,
+		canNavigate: true
 	};
 	mode: Mode = 'edit';
 	// Note: agenticSubMode removed - scout agent decides Q&A vs Edit mode automatically
@@ -1843,7 +1891,6 @@ class AIAssistantView extends ItemView {
 	private chatContainer: HTMLDivElement | null = null;
 	private contextDetails: HTMLDetailsElement | null = null;
 	private contextSummary: HTMLSpanElement | null = null;
-	private rulesDetails: HTMLDetailsElement | null = null;
 	private taskTextarea: HTMLTextAreaElement | null = null;
 	private submitButton: HTMLButtonElement | null = null;
 	private welcomeMessage: HTMLDivElement | null = null;
@@ -1901,6 +1948,15 @@ class AIAssistantView extends ItemView {
 			maxFolderNotes: this.plugin.settings.defaultMaxFolderNotes,
 			semanticMatchCount: this.plugin.settings.defaultSemanticMatchCount,
 			semanticMinSimilarity: this.plugin.settings.defaultSemanticMinSimilarity
+		};
+
+		// Initialize edit rules from settings defaults
+		this.editableScope = this.plugin.settings.defaultEditableScope;
+		this.capabilities = {
+			canAdd: this.plugin.settings.defaultCanAdd,
+			canDelete: this.plugin.settings.defaultCanDelete,
+			canCreate: this.plugin.settings.defaultCanCreate,
+			canNavigate: this.plugin.settings.defaultCanNavigate
 		};
 
 		// Chat header with clear button (top-left, fixed above chat)
@@ -1971,7 +2027,7 @@ class AIAssistantView extends ItemView {
 
 		const scoutContent = this.scoutSettingsPanel.createDiv({ cls: 'ai-assistant-toggle-content' });
 
-		// Max exploration rounds slider (2-5)
+		// Max exploration rounds slider (2-10)
 		const iterationsSection = scoutContent.createDiv({ cls: 'ai-assistant-slider-section' });
 		iterationsSection.createEl('div', { text: 'Exploration rounds:', cls: 'ai-assistant-section-label' });
 		const iterationsRow = iterationsSection.createDiv({ cls: 'ai-assistant-slider-row' });
@@ -1980,7 +2036,7 @@ class AIAssistantView extends ItemView {
 			cls: 'ai-assistant-depth-slider'
 		});
 		this.iterationsSlider.min = '2';
-		this.iterationsSlider.max = '5';
+		this.iterationsSlider.max = '10';
 		this.iterationsSlider.value = this.plugin.settings.agenticMaxIterations.toString();
 		this.scoutIterationsLabel = iterationsRow.createSpan({ cls: 'ai-assistant-slider-value' });
 		this.scoutIterationsLabel.setText(`${this.plugin.settings.agenticMaxIterations} rounds`);
@@ -1991,7 +2047,7 @@ class AIAssistantView extends ItemView {
 			await this.plugin.saveSettings();
 		});
 
-		// Max notes to select slider (3-20)
+		// Max notes to select slider (3-50)
 		const maxNotesSection = scoutContent.createDiv({ cls: 'ai-assistant-slider-section' });
 		maxNotesSection.createEl('div', { text: 'Max notes to select:', cls: 'ai-assistant-section-label' });
 		const maxNotesRow = maxNotesSection.createDiv({ cls: 'ai-assistant-slider-row' });
@@ -2000,7 +2056,7 @@ class AIAssistantView extends ItemView {
 			cls: 'ai-assistant-depth-slider'
 		});
 		this.maxNotesSlider.min = '3';
-		this.maxNotesSlider.max = '20';
+		this.maxNotesSlider.max = '50';
 		this.maxNotesSlider.value = this.plugin.settings.agenticMaxNotes.toString();
 		this.scoutMaxNotesLabel = maxNotesRow.createSpan({ cls: 'ai-assistant-slider-value' });
 		this.scoutMaxNotesLabel.setText(`${this.plugin.settings.agenticMaxNotes} notes`);
@@ -2163,37 +2219,7 @@ class AIAssistantView extends ItemView {
 			}).open();
 		});
 
-		// Rules toggle
-		this.rulesDetails = bottomSection.createEl('details', { cls: 'ai-assistant-toggle' });
-		this.rulesDetails.open = false;
-		const rulesSummaryEl = this.rulesDetails.createEl('summary');
-		rulesSummaryEl.createSpan({ text: 'Edit Rules' });
-
-		const rulesContent = this.rulesDetails.createDiv({ cls: 'ai-assistant-toggle-content' });
-
-		// Editable notes section
-		rulesContent.createEl('div', { text: 'Editable notes:', cls: 'ai-assistant-section-label' });
-		this.createRadioGroup(rulesContent, 'editable-scope', [
-			{ value: 'current', label: 'Current note only', checked: true },
-			{ value: 'linked', label: 'Linked notes only' },
-			{ value: 'context', label: 'All context notes' }
-		], (value) => {
-			this.editableScope = value as EditableScope;
-		});
-
-		// Capabilities section
-		rulesContent.createEl('div', { text: 'Capabilities:', cls: 'ai-assistant-section-label' });
-		const capsContainer = rulesContent.createDiv({ cls: 'ai-assistant-checkboxes' });
-
-		this.createCheckbox(capsContainer, 'Add content', this.capabilities.canAdd, (checked) => {
-			this.capabilities.canAdd = checked;
-		});
-		this.createCheckbox(capsContainer, 'Delete/replace content', this.capabilities.canDelete, (checked) => {
-			this.capabilities.canDelete = checked;
-		});
-		this.createCheckbox(capsContainer, 'Create new notes', this.capabilities.canCreate, (checked) => {
-			this.capabilities.canCreate = checked;
-		});
+		// Note: Edit Rules moved to Settings panel
 
 		// Initial context summary
 		await this.updateContextSummary();
@@ -2272,8 +2298,18 @@ class AIAssistantView extends ItemView {
 	}
 
 	// Called by plugin when settings change to sync sliders in the view
-	onSettingsChanged(changedGroup: 'focused' | 'scout') {
-		if (changedGroup === 'focused') {
+	onSettingsChanged(changedGroup: 'focused' | 'scout' | 'editRules') {
+		if (changedGroup === 'editRules') {
+			// Update edit rules from settings
+			const s = this.plugin.settings;
+			this.editableScope = s.defaultEditableScope;
+			this.capabilities = {
+				canAdd: s.defaultCanAdd,
+				canDelete: s.defaultCanDelete,
+				canCreate: s.defaultCanCreate,
+				canNavigate: s.defaultCanNavigate
+			};
+		} else if (changedGroup === 'focused') {
 			// Update focused mode sliders from settings
 			const s = this.plugin.settings;
 
@@ -2336,10 +2372,7 @@ class AIAssistantView extends ItemView {
 		if (this.contextDetails) {
 			this.contextDetails.style.display = this.mode === 'agentic' ? 'none' : 'block';
 		}
-		if (this.rulesDetails) {
-			// Always show Edit Rules in both modes (user can disable capabilities for Q&A-only)
-			this.rulesDetails.style.display = 'block';
-		}
+		// Note: Edit Rules moved to Settings panel
 		if (this.scoutSettingsPanel) {
 			this.scoutSettingsPanel.style.display = this.mode === 'agentic' ? 'block' : 'none';
 		}
@@ -3201,8 +3234,30 @@ class AIAssistantView extends ItemView {
 			);
 		}
 
-		// Insert edit blocks
-		const result = await this.plugin.insertEditBlocks(validatedEdits);
+		// Handle navigation edits first (execute immediately, not as pending blocks)
+		const navigationEdits = validatedEdits.filter(e => !e.error && e.instruction.position === 'open');
+		const contentEdits = validatedEdits.filter(e => e.instruction.position !== 'open');
+
+		let navigationSuccess = 0;
+		for (const nav of navigationEdits) {
+			const file = nav.resolvedFile;
+			if (file) {
+				try {
+					await this.app.workspace.getLeaf('tab').openFile(file);
+					navigationSuccess++;
+				} catch (e) {
+					nav.error = `Failed to open note: ${(e as Error).message}`;
+				}
+			} else {
+				nav.error = `Note not found: ${nav.instruction.file}`;
+			}
+		}
+
+		// Insert edit blocks for content edits only
+		const result = await this.plugin.insertEditBlocks(contentEdits);
+
+		// Add navigation successes to result count
+		result.success += navigationSuccess;
 
 		const fileCount = new Set(validatedEdits.filter(e => !e.error).map(e => e.instruction.file)).size;
 		const failedEdits = validatedEdits.filter(e => e.error);
@@ -3230,7 +3285,7 @@ class AIAssistantView extends ItemView {
 			proposedEdits: editResponse.edits,
 			editResults: {
 				success: result.success,
-				failed: result.failed,
+				failed: result.failed + navigationEdits.filter(e => e.error).length,
 				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
 			},
 			tokenUsage
@@ -3249,6 +3304,21 @@ class AIAssistantView extends ItemView {
 			maxNotes: this.plugin.settings.agenticMaxNotes
 		};
 
+		// Build scout tool configuration from settings
+		const toolConfig: ScoutToolConfig = {
+			listNotes: this.plugin.settings.scoutToolListNotes,
+			searchKeyword: this.plugin.settings.scoutToolSearchKeyword,
+			searchSemantic: this.plugin.settings.scoutToolSearchSemantic,
+			searchTaskRelevant: this.plugin.settings.scoutToolSearchTaskRelevant,
+			getLinks: this.plugin.settings.scoutToolGetLinks,
+			getLinksRecursive: this.plugin.settings.scoutToolGetLinksRecursive,
+			viewAllNotes: this.plugin.settings.scoutToolViewAllNotes,
+			exploreVault: this.plugin.settings.scoutToolExploreVault,
+			keywordLimit: this.plugin.settings.agenticKeywordLimit,
+			semanticLimit: this.plugin.settings.scoutSemanticLimit,
+			listNotesLimit: this.plugin.settings.scoutListNotesLimit
+		};
+
 		const currentContent = await this.app.vault.cachedRead(file);
 
 		let contextResult: ContextAgentResult;
@@ -3264,7 +3334,7 @@ class AIAssistantView extends ItemView {
 				this.plugin.embeddingIndex,
 				this.plugin.settings.openaiApiKey,
 				this.plugin.settings.embeddingModel,
-				this.plugin.settings.agenticKeywordLimit,
+				toolConfig,
 				(event) => {
 					if (event.type === 'tool_call' || event.type === 'iteration') {
 						this.showAgentProgress(event.message, event.detail);
@@ -4142,9 +4212,9 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		new Setting(scoutContent)
 			.setName('Max Exploration Rounds')
-			.setDesc('Maximum tool-calling iterations for context agent (2-5)')
+			.setDesc('Maximum tool-calling iterations for context agent (2-10)')
 			.addSlider(slider => slider
-				.setLimits(2, 5, 1)
+				.setLimits(2, 10, 1)
 				.setValue(this.plugin.settings.agenticMaxIterations)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
@@ -4155,9 +4225,9 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		new Setting(scoutContent)
 			.setName('Max Notes to Select')
-			.setDesc('Maximum notes the context agent can include (3-20)')
+			.setDesc('Maximum notes the context agent can include (3-50)')
 			.addSlider(slider => slider
-				.setLimits(3, 20, 1)
+				.setLimits(3, 50, 1)
 				.setValue(this.plugin.settings.agenticMaxNotes)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
@@ -4175,6 +4245,228 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.setDynamicTooltip()
 				.onChange(async (value) => {
 					this.plugin.settings.agenticKeywordLimit = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(scoutContent)
+			.setName('Semantic Search Limit')
+			.setDesc('Maximum results for semantic search tools (3-20)')
+			.addSlider(slider => slider
+				.setLimits(3, 20, 1)
+				.setValue(this.plugin.settings.scoutSemanticLimit)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.scoutSemanticLimit = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(scoutContent)
+			.setName('List Notes Limit')
+			.setDesc('Maximum results for list_notes tool (10-50)')
+			.addSlider(slider => slider
+				.setLimits(10, 50, 1)
+				.setValue(this.plugin.settings.scoutListNotesLimit)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.scoutListNotesLimit = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Scout tool toggles
+		scoutContent.createEl('div', { text: 'Available Tools', cls: 'setting-item-name' });
+		scoutContent.createEl('div', {
+			text: 'Enable or disable individual scout agent tools. update_selection and fetch_note are always enabled.',
+			cls: 'setting-item-description'
+		});
+
+		const toolsGrid = scoutContent.createDiv({ cls: 'ai-settings-tools-grid' });
+
+		// List Notes toggle
+		const listNotesItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const listNotesToggle = listNotesItem.createEl('input', { type: 'checkbox' });
+		listNotesToggle.checked = this.plugin.settings.scoutToolListNotes;
+		listNotesToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolListNotes = listNotesToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const listNotesLabel = listNotesItem.createDiv();
+		listNotesLabel.createEl('div', { text: 'List Notes', cls: 'ai-settings-tool-name' });
+		listNotesLabel.createEl('div', { text: 'Browse notes with previews', cls: 'ai-settings-tool-desc' });
+
+		// Keyword Search toggle
+		const keywordItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const keywordToggle = keywordItem.createEl('input', { type: 'checkbox' });
+		keywordToggle.checked = this.plugin.settings.scoutToolSearchKeyword;
+		keywordToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolSearchKeyword = keywordToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const keywordLabel = keywordItem.createDiv();
+		keywordLabel.createEl('div', { text: 'Keyword Search', cls: 'ai-settings-tool-name' });
+		keywordLabel.createEl('div', { text: 'Fast text search', cls: 'ai-settings-tool-desc' });
+
+		// Semantic Search toggle
+		const semanticItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const semanticToggle = semanticItem.createEl('input', { type: 'checkbox' });
+		semanticToggle.checked = this.plugin.settings.scoutToolSearchSemantic;
+		semanticToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolSearchSemantic = semanticToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const semanticLabel = semanticItem.createDiv();
+		semanticLabel.createEl('div', { text: 'Semantic Search', cls: 'ai-settings-tool-name' });
+		semanticLabel.createEl('div', { text: 'Concept-based search', cls: 'ai-settings-tool-desc' });
+
+		// Task Search toggle
+		const taskItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const taskToggle = taskItem.createEl('input', { type: 'checkbox' });
+		taskToggle.checked = this.plugin.settings.scoutToolSearchTaskRelevant;
+		taskToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolSearchTaskRelevant = taskToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const taskLabel = taskItem.createDiv();
+		taskLabel.createEl('div', { text: 'Task Search', cls: 'ai-settings-tool-name' });
+		taskLabel.createEl('div', { text: 'Task-aware semantic', cls: 'ai-settings-tool-desc' });
+
+		// Get Links toggle
+		const linksItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const linksToggle = linksItem.createEl('input', { type: 'checkbox' });
+		linksToggle.checked = this.plugin.settings.scoutToolGetLinks;
+		linksToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolGetLinks = linksToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const linksLabel = linksItem.createDiv();
+		linksLabel.createEl('div', { text: 'Get Links', cls: 'ai-settings-tool-name' });
+		linksLabel.createEl('div', { text: 'Single-hop exploration', cls: 'ai-settings-tool-desc' });
+
+		// Link Hop toggle
+		const linkHopItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const linkHopToggle = linkHopItem.createEl('input', { type: 'checkbox' });
+		linkHopToggle.checked = this.plugin.settings.scoutToolGetLinksRecursive;
+		linkHopToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolGetLinksRecursive = linkHopToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const linkHopLabel = linkHopItem.createDiv();
+		linkHopLabel.createEl('div', { text: 'Link Hop', cls: 'ai-settings-tool-name' });
+		linkHopLabel.createEl('div', { text: 'Multi-hop BFS traversal', cls: 'ai-settings-tool-desc' });
+
+		// View All Notes toggle
+		const viewAllItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const viewAllToggle = viewAllItem.createEl('input', { type: 'checkbox' });
+		viewAllToggle.checked = this.plugin.settings.scoutToolViewAllNotes;
+		viewAllToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolViewAllNotes = viewAllToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const viewAllLabel = viewAllItem.createDiv();
+		viewAllLabel.createEl('div', { text: 'View All Notes', cls: 'ai-settings-tool-name' });
+		viewAllLabel.createEl('div', { text: 'List notes with frontmatter', cls: 'ai-settings-tool-desc' });
+
+		// Explore Vault toggle
+		const exploreItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const exploreToggle = exploreItem.createEl('input', { type: 'checkbox' });
+		exploreToggle.checked = this.plugin.settings.scoutToolExploreVault;
+		exploreToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolExploreVault = exploreToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const exploreLabel = exploreItem.createDiv();
+		exploreLabel.createEl('div', { text: 'Explore Vault', cls: 'ai-settings-tool-name' });
+		exploreLabel.createEl('div', { text: 'Folders and tags', cls: 'ai-settings-tool-desc' });
+
+		// Expected tokens display
+		const expectedTokensEl = scoutContent.createDiv({ cls: 'ai-settings-expected-tokens' });
+		const updateExpectedTokens = () => {
+			const iterations = this.plugin.settings.agenticMaxIterations;
+			const tokensPerIteration = this.plugin.settings.agenticMaxTokensPerIteration;
+			const answerLimit = this.plugin.settings.answerEditTokenLimit;
+			const total = (iterations * tokensPerIteration) + answerLimit;
+			expectedTokensEl.setText(`Expected max tokens: ~${total.toLocaleString()} (${iterations} rounds × ${tokensPerIteration.toLocaleString()} + ${answerLimit.toLocaleString()} answer limit)`);
+		};
+		updateExpectedTokens();
+
+		// 6c: Edit Rules Defaults
+		const editRulesEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const editRulesSummary = editRulesEl.createEl('summary');
+		editRulesSummary.setText('Edit Rules');
+
+		const editRulesContent = editRulesEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+
+		new Setting(editRulesContent)
+			.setName('Editable Scope')
+			.setDesc('Which notes the AI can edit')
+			.addDropdown(dropdown => dropdown
+				.addOption('current', 'Current note only')
+				.addOption('linked', 'Linked notes only')
+				.addOption('context', 'All context notes')
+				.setValue(this.plugin.settings.defaultEditableScope)
+				.onChange(async (value) => {
+					this.plugin.settings.defaultEditableScope = value as EditableScope;
+					await this.plugin.saveSettings();
+					this.plugin.notifySettingsChanged('editRules');
+				}));
+
+		new Setting(editRulesContent)
+			.setName('Allow adding content')
+			.setDesc('AI can insert new lines and content')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.defaultCanAdd)
+				.onChange(async (value) => {
+					this.plugin.settings.defaultCanAdd = value;
+					await this.plugin.saveSettings();
+					this.plugin.notifySettingsChanged('editRules');
+				}));
+
+		new Setting(editRulesContent)
+			.setName('Allow deleting/replacing content')
+			.setDesc('AI can delete or replace existing content')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.defaultCanDelete)
+				.onChange(async (value) => {
+					this.plugin.settings.defaultCanDelete = value;
+					await this.plugin.saveSettings();
+					this.plugin.notifySettingsChanged('editRules');
+				}));
+
+		new Setting(editRulesContent)
+			.setName('Allow creating new notes')
+			.setDesc('AI can create new note files')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.defaultCanCreate)
+				.onChange(async (value) => {
+					this.plugin.settings.defaultCanCreate = value;
+					await this.plugin.saveSettings();
+					this.plugin.notifySettingsChanged('editRules');
+				}));
+
+		new Setting(editRulesContent)
+			.setName('Allow opening notes')
+			.setDesc('AI can open notes in new tabs')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.defaultCanNavigate)
+				.onChange(async (value) => {
+					this.plugin.settings.defaultCanNavigate = value;
+					await this.plugin.saveSettings();
+					this.plugin.notifySettingsChanged('editRules');
+				}));
+
+		// 6d: Context Options
+		const contextOptionsEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const contextOptionsSummary = contextOptionsEl.createEl('summary');
+		contextOptionsSummary.setText('Context Options');
+
+		const contextOptionsContent = contextOptionsEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+
+		new Setting(contextOptionsContent)
+			.setName('Show vault tags to AI')
+			.setDesc('Include all vault tags in AI context for better categorization')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.showVaultTagsToAI)
+				.onChange(async (value) => {
+					this.plugin.settings.showVaultTagsToAI = value;
 					await this.plugin.saveSettings();
 				}));
 
