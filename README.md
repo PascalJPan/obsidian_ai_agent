@@ -26,6 +26,12 @@ An AI scout agent explores your vault autonomously to find the best context for 
 - Selects notes based on task relevance, not static rules
 - Then executes your task (Q&A or edit) with the curated context
 
+Scout agent tools include:
+- `view_all_notes` — Bird's-eye view of your entire vault with aliases/descriptions from YAML frontmatter
+- `explore_vault` — List folder contents or find notes by tag
+- `search_keyword` / `search_semantic` — Find notes by keyword or meaning
+- `get_links_recursive` — Multi-hop link traversal to explore note connections
+
 **Flexible Context** (Q&A & Edit modes)
 - Link depth slider (0-3): control how many hops of links to include
   - 0: Current note only
@@ -36,9 +42,11 @@ An AI scout agent explores your vault autonomously to find the best context for 
 
 **Granular Permissions**
 - Control which notes the AI can edit
-- Toggle capabilities: add content, delete/replace, create new notes
+- Toggle capabilities: add content, delete/replace, create new notes, open notes in new tabs
 - Exclude sensitive folders entirely
 - **Hard enforcement**: Rules are validated server-side, not just suggested to AI
+
+The `canNavigate` capability allows the AI to open notes in new tabs when relevant to your task—useful for suggesting related reading or jumping to referenced material.
 
 **Smart Token Management**
 - Set a token limit for context sent to the AI

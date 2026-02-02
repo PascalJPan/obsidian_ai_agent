@@ -36,6 +36,11 @@ export function computeNewContent(currentContent: string, instruction: EditInstr
 	const position = instruction.position;
 	const newText = instruction.content;
 
+	// Navigation action - no content change
+	if (position === 'open') {
+		return { content: currentContent, error: null };
+	}
+
 	if (position === 'start') {
 		return { content: newText + '\n\n' + currentContent, error: null };
 	}

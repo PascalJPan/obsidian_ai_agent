@@ -42,7 +42,7 @@ export function buildForbiddenActions(capabilities: AICapabilities, editableScop
 	const forbidden: string[] = [];
 
 	// Check if ALL edit capabilities are disabled (Q&A only mode)
-	const allDisabled = !capabilities.canAdd && !capabilities.canDelete && !capabilities.canCreate;
+	const allDisabled = !capabilities.canAdd && !capabilities.canDelete && !capabilities.canCreate && !capabilities.canNavigate;
 	if (allDisabled) {
 		return `\n\n## Q&A ONLY MODE:
 All edit capabilities are disabled. You can ONLY answer questions.
@@ -58,6 +58,9 @@ All edit capabilities are disabled. You can ONLY answer questions.
 	}
 	if (!capabilities.canCreate) {
 		forbidden.push('- DO NOT use "create" position or create new files');
+	}
+	if (!capabilities.canNavigate) {
+		forbidden.push('- DO NOT use "open" position (navigation disabled)');
 	}
 	if (editableScope === 'current') {
 		forbidden.push('- DO NOT edit any file except the CURRENT NOTE (first file in context)');
@@ -160,6 +163,16 @@ Note: When deleting all content, you can delete lines 1-N where N is the last li
 - "create" - Create a new file (specify full path with .md extension in "file" field)
   Example: { "file": "Projects/New Project.md", "position": "create", "content": "# New Project\\n\\nProject description here" }
   Note: Parent folders will be created automatically if they don't exist. Also make sure to link to other notes if it makes sense via obsidian linkes [[]]. Generally I expect this.`;
+	}
+
+	if (capabilities.canNavigate) {
+		positionTypes += `
+
+## Navigation:
+- "open" - Open a note in a new tab (does not edit, just navigates)
+  Example: { "file": "My Note.md", "position": "open", "content": "" }
+  Use this when the user asks to open, show, or navigate to a note.
+  Note: The file must exist in the vault. Content field should be empty.`;
 	}
 
 	return positionTypes;

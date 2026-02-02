@@ -14,7 +14,8 @@ import {
 	SemanticSearchResult,
 	LinkInfo,
 	EmbeddingIndex,
-	EmbeddingModel
+	EmbeddingModel,
+	ScoutToolConfig
 } from '../types';
 import { generateEmbedding, searchSemantic } from './semantic';
 
@@ -26,189 +27,279 @@ interface SelectionState {
 	recommendedMode?: 'qa' | 'edit';  // Agent's recommended mode for Phase 2
 }
 
-// Tool definitions for OpenAI function calling
-const CONTEXT_AGENT_TOOLS = [
-	{
-		type: 'function' as const,
-		function: {
-			name: 'update_selection',
-			description: 'Update your current selection of relevant notes. CRITICAL: Call this after each exploration step to save your progress. Set confidence to "done" when you have enough context. When done, also set recommendedMode based on the task.',
-			parameters: {
-				type: 'object',
-				properties: {
-					selectedPaths: {
-						type: 'array',
-						items: { type: 'string' },
-						description: 'Current best picks - full paths (e.g., "Projects/My Project.md")'
-					},
-					reasoning: {
-						type: 'string',
-						description: 'Why these notes are relevant to the task'
-					},
-					confidence: {
-						type: 'string',
-						enum: ['exploring', 'confident', 'done'],
-						description: '"exploring" = still looking, "confident" = good selection but may continue, "done" = finished exploring'
-					},
-					recommendedMode: {
-						type: 'string',
-						enum: ['qa', 'edit'],
-						description: 'When confidence is "done": "qa" if user is asking a question/seeking info, "edit" if user wants to modify/add/delete note content'
-					}
+// Individual tool definitions for OpenAI function calling
+const TOOL_UPDATE_SELECTION = {
+	type: 'function' as const,
+	function: {
+		name: 'update_selection',
+		description: 'Update your current selection of relevant notes. CRITICAL: Call this after each exploration step to save your progress. Set confidence to "done" when you have enough context. When done, also set recommendedMode based on the task.',
+		parameters: {
+			type: 'object',
+			properties: {
+				selectedPaths: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Current best picks - full paths (e.g., "Projects/My Project.md")'
 				},
-				required: ['selectedPaths', 'reasoning', 'confidence']
-			}
+				reasoning: {
+					type: 'string',
+					description: 'Why these notes are relevant to the task'
+				},
+				confidence: {
+					type: 'string',
+					enum: ['exploring', 'confident', 'done'],
+					description: '"exploring" = still looking, "confident" = good selection but may continue, "done" = finished exploring'
+				},
+				recommendedMode: {
+					type: 'string',
+					enum: ['qa', 'edit'],
+					description: 'When confidence is "done": "qa" if user is asking a question/seeking info, "edit" if user wants to modify/add/delete note content'
+				}
+			},
+			required: ['selectedPaths', 'reasoning', 'confidence']
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'list_notes',
-			description: 'List notes with brief previews. Use to get an overview of available notes.',
-			parameters: {
-				type: 'object',
-				properties: {
-					folder: {
-						type: 'string',
-						description: 'Optional folder path to filter by (e.g., "Projects/Active")'
-					},
-					limit: {
-						type: 'number',
-						description: 'Max notes to return (default 30, max 50)'
-					}
+	}
+};
+
+const TOOL_FETCH_NOTE = {
+	type: 'function' as const,
+	function: {
+		name: 'fetch_note',
+		description: 'Get the full content of a specific note to verify its relevance.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {
+					type: 'string',
+					description: 'Path to the note (e.g., "Projects/My Project.md")'
+				}
+			},
+			required: ['path']
+		}
+	}
+};
+
+const TOOL_LIST_NOTES = {
+	type: 'function' as const,
+	function: {
+		name: 'list_notes',
+		description: 'List notes with brief previews. Use to get an overview of available notes.',
+		parameters: {
+			type: 'object',
+			properties: {
+				folder: {
+					type: 'string',
+					description: 'Optional folder path to filter by (e.g., "Projects/Active")'
+				},
+				limit: {
+					type: 'number',
+					description: 'Max notes to return (default 30, max 50)'
 				}
 			}
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'search_keyword',
-			description: 'Search for notes containing a keyword. Results prioritized: title matches > heading matches > content matches. Fast and deterministic.',
-			parameters: {
-				type: 'object',
-				properties: {
-					keyword: {
-						type: 'string',
-						description: 'The word or phrase to search for'
-					},
-					limit: {
-						type: 'number',
-						description: 'Max results (default from settings, typically 10)'
-					}
+	}
+};
+
+const TOOL_SEARCH_KEYWORD = {
+	type: 'function' as const,
+	function: {
+		name: 'search_keyword',
+		description: 'Search for notes containing a keyword. Results prioritized: title matches > heading matches > content matches. Fast and deterministic.',
+		parameters: {
+			type: 'object',
+			properties: {
+				keyword: {
+					type: 'string',
+					description: 'The word or phrase to search for'
 				},
-				required: ['keyword']
-			}
+				limit: {
+					type: 'number',
+					description: 'Max results (default from settings, typically 10)'
+				}
+			},
+			required: ['keyword']
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'search_semantic',
-			description: 'Search for notes semantically similar to a query. Best for finding conceptually related notes when you don\'t know exact keywords.',
-			parameters: {
-				type: 'object',
-				properties: {
-					query: {
-						type: 'string',
-						description: 'Search query - describe what you\'re looking for'
-					},
-					topK: {
-						type: 'number',
-						description: 'Number of results (default 10, max 20)'
-					}
+	}
+};
+
+const TOOL_SEARCH_SEMANTIC = {
+	type: 'function' as const,
+	function: {
+		name: 'search_semantic',
+		description: 'Search for notes semantically similar to a query. Best for finding conceptually related notes when you don\'t know exact keywords.',
+		parameters: {
+			type: 'object',
+			properties: {
+				query: {
+					type: 'string',
+					description: 'Search query - describe what you\'re looking for'
 				},
-				required: ['query']
-			}
+				topK: {
+					type: 'number',
+					description: 'Number of results (default 10, max 20)'
+				}
+			},
+			required: ['query']
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'search_task_relevant',
-			description: 'Search for notes relevant to accomplishing a specific task. Combines task context with semantic search for better results.',
-			parameters: {
-				type: 'object',
-				properties: {
-					task: {
-						type: 'string',
-						description: 'The task description - what you need to accomplish'
-					},
-					topK: {
-						type: 'number',
-						description: 'Number of results (default 10)'
-					}
+	}
+};
+
+const TOOL_SEARCH_TASK_RELEVANT = {
+	type: 'function' as const,
+	function: {
+		name: 'search_task_relevant',
+		description: 'Search for notes relevant to accomplishing a specific task. Combines task context with semantic search for better results.',
+		parameters: {
+			type: 'object',
+			properties: {
+				task: {
+					type: 'string',
+					description: 'The task description - what you need to accomplish'
 				},
-				required: ['task']
-			}
+				topK: {
+					type: 'number',
+					description: 'Number of results (default 10)'
+				}
+			},
+			required: ['task']
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'fetch_note',
-			description: 'Get the full content of a specific note to verify its relevance.',
-			parameters: {
-				type: 'object',
-				properties: {
-					path: {
-						type: 'string',
-						description: 'Path to the note (e.g., "Projects/My Project.md")'
-					}
+	}
+};
+
+const TOOL_GET_LINKS = {
+	type: 'function' as const,
+	function: {
+		name: 'get_links',
+		description: 'Get notes directly linked to/from a specific note. For single-hop exploration.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {
+					type: 'string',
+					description: 'Path to the note'
 				},
-				required: ['path']
-			}
+				direction: {
+					type: 'string',
+					enum: ['in', 'out', 'both'],
+					description: 'Link direction: "in" (backlinks), "out" (outgoing), or "both"'
+				}
+			},
+			required: ['path']
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'get_links',
-			description: 'Get notes directly linked to/from a specific note. For single-hop exploration.',
-			parameters: {
-				type: 'object',
-				properties: {
-					path: {
-						type: 'string',
-						description: 'Path to the note'
-					},
-					direction: {
-						type: 'string',
-						enum: ['in', 'out', 'both'],
-						description: 'Link direction: "in" (backlinks), "out" (outgoing), or "both"'
-					}
+	}
+};
+
+const TOOL_GET_LINKS_RECURSIVE = {
+	type: 'function' as const,
+	function: {
+		name: 'get_links_recursive',
+		description: 'Get all notes within N hops of a note. Efficient multi-hop exploration in one call.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {
+					type: 'string',
+					description: 'Path to the starting note'
 				},
-				required: ['path']
-			}
+				depth: {
+					type: 'number',
+					description: 'How many hops to follow (1-3)'
+				},
+				direction: {
+					type: 'string',
+					enum: ['in', 'out', 'both'],
+					description: 'Link direction: "in" (backlinks), "out" (outgoing), or "both"'
+				}
+			},
+			required: ['path']
 		}
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'get_links_recursive',
-			description: 'Get all notes within N hops of a note. Efficient multi-hop exploration in one call.',
-			parameters: {
-				type: 'object',
-				properties: {
-					path: {
-						type: 'string',
-						description: 'Path to the starting note'
-					},
-					depth: {
-						type: 'number',
-						description: 'How many hops to follow (1-3)'
-					},
-					direction: {
-						type: 'string',
-						enum: ['in', 'out', 'both'],
-						description: 'Link direction: "in" (backlinks), "out" (outgoing), or "both"'
-					}
+	}
+};
+
+const TOOL_VIEW_ALL_NOTES = {
+	type: 'function' as const,
+	function: {
+		name: 'view_all_notes',
+		description: 'Get a list of ALL note names in the vault with their aliases and descriptions from YAML frontmatter. Use this to get a complete overview of available notes without fetching content.',
+		parameters: {
+			type: 'object',
+			properties: {
+				includeAliases: {
+					type: 'boolean',
+					description: 'Include aliases from frontmatter (default: true)'
 				},
-				required: ['path']
+				includeDescriptions: {
+					type: 'boolean',
+					description: 'Include description field from frontmatter (default: true)'
+				}
 			}
 		}
 	}
-];
+};
+
+const TOOL_EXPLORE_VAULT = {
+	type: 'function' as const,
+	function: {
+		name: 'explore_vault',
+		description: 'Explore vault structure: list folder contents or find notes by tag.',
+		parameters: {
+			type: 'object',
+			properties: {
+				action: {
+					type: 'string',
+					enum: ['list_folder', 'find_by_tag'],
+					description: 'Action to perform'
+				},
+				folder: {
+					type: 'string',
+					description: 'For list_folder: folder path (use "/" or "" for root)'
+				},
+				tag: {
+					type: 'string',
+					description: 'For find_by_tag: tag to search (with or without #)'
+				},
+				recursive: {
+					type: 'boolean',
+					description: 'For list_folder: include subfolders (default: false)'
+				}
+			},
+			required: ['action']
+		}
+	}
+};
+
+// Generic OpenAI tool definition type
+interface OpenAITool {
+	type: 'function';
+	function: {
+		name: string;
+		description: string;
+		parameters: {
+			type: string;
+			properties: Record<string, unknown>;
+			required?: string[];
+		};
+	};
+}
+
+/**
+ * Get the list of available tools based on configuration
+ */
+export function getAvailableTools(config: ScoutToolConfig): OpenAITool[] {
+	// update_selection and fetch_note are always required
+	const tools: OpenAITool[] = [TOOL_UPDATE_SELECTION, TOOL_FETCH_NOTE];
+
+	if (config.listNotes) tools.push(TOOL_LIST_NOTES);
+	if (config.searchKeyword) tools.push(TOOL_SEARCH_KEYWORD);
+	if (config.searchSemantic) tools.push(TOOL_SEARCH_SEMANTIC);
+	if (config.searchTaskRelevant) tools.push(TOOL_SEARCH_TASK_RELEVANT);
+	if (config.getLinks) tools.push(TOOL_GET_LINKS);
+	if (config.getLinksRecursive) tools.push(TOOL_GET_LINKS_RECURSIVE);
+	if (config.viewAllNotes) tools.push(TOOL_VIEW_ALL_NOTES);
+	if (config.exploreVault) tools.push(TOOL_EXPLORE_VAULT);
+
+	return tools;
+}
 
 function buildContextAgentSystemPrompt(maxNotes: number): string {
 	return `You are a context curator for an AI assistant. Your goal: find notes that will help accomplish the user's task.
@@ -267,7 +358,7 @@ interface ToolHandlerContext {
 	fetchedNotes: Set<string>;  // Track notes we've already fetched
 	currentFilePath: string;    // Path of the current file for task-relevant search
 	currentFileContent: string; // Content of current file for task-relevant search
-	keywordLimit: number;       // Default limit for keyword search results
+	toolConfig: ScoutToolConfig; // Tool configuration with limits
 }
 
 /**
@@ -297,6 +388,10 @@ async function handleToolCall(
 			return await handleGetLinks(args, context, onProgress);
 		case 'get_links_recursive':
 			return await handleGetLinksRecursive(args, context, onProgress);
+		case 'view_all_notes':
+			return await handleViewAllNotes(args, context, onProgress);
+		case 'explore_vault':
+			return await handleExploreVault(args, context, onProgress);
 		default:
 			return JSON.stringify({ error: `Unknown tool: ${name}` });
 	}
@@ -308,7 +403,7 @@ async function handleListNotes(
 	onProgress: (event: AgentProgressEvent) => void
 ): Promise<string> {
 	const folder = args.folder as string | undefined;
-	const limit = Math.min((args.limit as number) || 30, 50);
+	const limit = Math.min((args.limit as number) || context.toolConfig.listNotesLimit, 50);
 
 	onProgress({
 		type: 'tool_call',
@@ -350,7 +445,7 @@ async function handleSearchSemantic(
 	onProgress: (event: AgentProgressEvent) => void
 ): Promise<string> {
 	const query = args.query as string;
-	const topK = Math.min((args.topK as number) || 10, 20);
+	const topK = Math.min((args.topK as number) || context.toolConfig.semanticLimit, 20);
 
 	onProgress({
 		type: 'tool_call',
@@ -523,7 +618,7 @@ async function handleSearchKeyword(
 	onProgress: (event: AgentProgressEvent) => void
 ): Promise<string> {
 	const keyword = (args.keyword as string || '').toLowerCase().trim();
-	const limit = Math.min((args.limit as number) || context.keywordLimit, 20);
+	const limit = Math.min((args.limit as number) || context.toolConfig.keywordLimit, 20);
 
 	if (!keyword) {
 		return JSON.stringify({ error: 'Keyword is required', results: [] });
@@ -757,6 +852,260 @@ async function handleGetLinksRecursive(
 	return JSON.stringify({ notes: results });
 }
 
+/**
+ * View all note names with frontmatter aliases and descriptions
+ */
+async function handleViewAllNotes(
+	args: Record<string, unknown>,
+	context: ToolHandlerContext,
+	onProgress: (event: AgentProgressEvent) => void
+): Promise<string> {
+	const includeAliases = args.includeAliases !== false; // default true
+	const includeDescriptions = args.includeDescriptions !== false; // default true
+
+	onProgress({
+		type: 'tool_call',
+		message: 'Getting all note names with frontmatter',
+		detail: `aliases: ${includeAliases}, descriptions: ${includeDescriptions}`
+	});
+
+	const allFiles = context.vault.getMarkdownFiles();
+	const filtered = allFiles.filter(f => !isFileExcluded(f.path, context.excludedFolders));
+
+	const notes: Array<{ path: string; aliases?: string[]; description?: string }> = [];
+
+	for (const file of filtered) {
+		const noteInfo: { path: string; aliases?: string[]; description?: string } = {
+			path: file.path
+		};
+
+		const cache = context.metadataCache.getFileCache(file);
+		const frontmatter = cache?.frontmatter;
+
+		if (frontmatter) {
+			if (includeAliases && frontmatter.aliases) {
+				// Handle both array and single string aliases
+				if (Array.isArray(frontmatter.aliases)) {
+					noteInfo.aliases = frontmatter.aliases;
+				} else if (typeof frontmatter.aliases === 'string') {
+					noteInfo.aliases = [frontmatter.aliases];
+				}
+			}
+			if (includeDescriptions && frontmatter.description) {
+				noteInfo.description = String(frontmatter.description);
+			}
+		}
+
+		notes.push(noteInfo);
+	}
+
+	// Sort by path for consistent ordering
+	notes.sort((a, b) => a.path.localeCompare(b.path));
+
+	const notesWithMeta = notes.filter(n => n.aliases || n.description).length;
+	onProgress({
+		type: 'tool_call',
+		message: `Found ${notes.length} notes (${notesWithMeta} with metadata)`,
+		detail: notes.slice(0, 5).map(n => n.path.split('/').pop()).join(', ') + (notes.length > 5 ? ', ...' : '')
+	});
+
+	return JSON.stringify({ notes, total: notes.length });
+}
+
+/**
+ * Explore vault structure: list folder contents or find notes by tag
+ */
+async function handleExploreVault(
+	args: Record<string, unknown>,
+	context: ToolHandlerContext,
+	onProgress: (event: AgentProgressEvent) => void
+): Promise<string> {
+	const action = args.action as string;
+
+	if (action === 'list_folder') {
+		return await handleListFolder(args, context, onProgress);
+	} else if (action === 'find_by_tag') {
+		return await handleFindByTag(args, context, onProgress);
+	} else {
+		return JSON.stringify({ error: `Unknown action: ${action}. Use "list_folder" or "find_by_tag"` });
+	}
+}
+
+/**
+ * List contents of a folder
+ */
+async function handleListFolder(
+	args: Record<string, unknown>,
+	context: ToolHandlerContext,
+	onProgress: (event: AgentProgressEvent) => void
+): Promise<string> {
+	const folderPath = (args.folder as string) || '';
+	const recursive = args.recursive === true;
+
+	onProgress({
+		type: 'tool_call',
+		message: `Listing folder: ${folderPath || '(root)'}`,
+		detail: recursive ? 'recursive' : 'direct children only'
+	});
+
+	const allFiles = context.vault.getMarkdownFiles();
+	const folders = new Set<string>();
+	const files: string[] = [];
+
+	// Normalize folder path
+	const normalizedFolder = folderPath === '/' ? '' : folderPath;
+	const folderPrefix = normalizedFolder ? (normalizedFolder.endsWith('/') ? normalizedFolder : normalizedFolder + '/') : '';
+
+	for (const file of allFiles) {
+		if (isFileExcluded(file.path, context.excludedFolders)) continue;
+
+		// Check if file is in the target folder
+		if (normalizedFolder === '') {
+			// Root folder
+			if (recursive) {
+				files.push(file.path);
+				// Collect all parent folders
+				const parts = file.path.split('/');
+				for (let i = 1; i < parts.length; i++) {
+					const folderPart = parts.slice(0, i).join('/');
+					if (!isFileExcluded(folderPart, context.excludedFolders)) {
+						folders.add(folderPart);
+					}
+				}
+			} else {
+				// Direct children only
+				if (!file.path.includes('/')) {
+					files.push(file.path);
+				} else {
+					const topFolder = file.path.split('/')[0];
+					if (!isFileExcluded(topFolder, context.excludedFolders)) {
+						folders.add(topFolder);
+					}
+				}
+			}
+		} else {
+			// Specific folder
+			if (file.path.startsWith(folderPrefix)) {
+				const relativePath = file.path.substring(folderPrefix.length);
+				if (recursive) {
+					files.push(file.path);
+					// Collect subfolders
+					const parts = relativePath.split('/');
+					for (let i = 1; i < parts.length; i++) {
+						const subFolder = folderPrefix + parts.slice(0, i).join('/');
+						if (!isFileExcluded(subFolder, context.excludedFolders)) {
+							folders.add(subFolder);
+						}
+					}
+				} else {
+					// Direct children only
+					if (!relativePath.includes('/')) {
+						files.push(file.path);
+					} else {
+						const immediateChild = folderPrefix + relativePath.split('/')[0];
+						if (!isFileExcluded(immediateChild, context.excludedFolders)) {
+							folders.add(immediateChild);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	const sortedFolders = [...folders].sort();
+	const sortedFiles = files.sort();
+
+	onProgress({
+		type: 'tool_call',
+		message: `Found ${sortedFolders.length} folders, ${sortedFiles.length} files`,
+		detail: sortedFiles.slice(0, 3).map(f => f.split('/').pop()).join(', ') + (sortedFiles.length > 3 ? ', ...' : '')
+	});
+
+	return JSON.stringify({
+		folder: folderPath || '(root)',
+		folders: sortedFolders,
+		files: sortedFiles
+	});
+}
+
+/**
+ * Find notes by tag
+ */
+async function handleFindByTag(
+	args: Record<string, unknown>,
+	context: ToolHandlerContext,
+	onProgress: (event: AgentProgressEvent) => void
+): Promise<string> {
+	const rawTag = (args.tag as string) || '';
+	// Normalize tag - strip leading # if present
+	const tag = rawTag.startsWith('#') ? rawTag.substring(1) : rawTag;
+
+	if (!tag) {
+		return JSON.stringify({ error: 'Tag is required', matches: [] });
+	}
+
+	onProgress({
+		type: 'tool_call',
+		message: `Finding notes with tag: #${tag}`,
+		detail: 'Searching content and frontmatter'
+	});
+
+	const allFiles = context.vault.getMarkdownFiles();
+	const matches: string[] = [];
+
+	for (const file of allFiles) {
+		if (isFileExcluded(file.path, context.excludedFolders)) continue;
+
+		const cache = context.metadataCache.getFileCache(file);
+		let hasTag = false;
+
+		// Check inline tags in content
+		if (cache?.tags) {
+			for (const tagRef of cache.tags) {
+				// tagRef.tag includes the # prefix
+				const inlineTag = tagRef.tag.substring(1);
+				if (inlineTag === tag || inlineTag.startsWith(tag + '/')) {
+					hasTag = true;
+					break;
+				}
+			}
+		}
+
+		// Check frontmatter tags
+		if (!hasTag && cache?.frontmatter?.tags) {
+			const fmTags = cache.frontmatter.tags;
+			if (Array.isArray(fmTags)) {
+				for (const fmTag of fmTags) {
+					const normalizedFmTag = String(fmTag).startsWith('#') ? String(fmTag).substring(1) : String(fmTag);
+					if (normalizedFmTag === tag || normalizedFmTag.startsWith(tag + '/')) {
+						hasTag = true;
+						break;
+					}
+				}
+			} else if (typeof fmTags === 'string') {
+				const normalizedFmTag = fmTags.startsWith('#') ? fmTags.substring(1) : fmTags;
+				if (normalizedFmTag === tag || normalizedFmTag.startsWith(tag + '/')) {
+					hasTag = true;
+				}
+			}
+		}
+
+		if (hasTag) {
+			matches.push(file.path);
+		}
+	}
+
+	matches.sort();
+
+	onProgress({
+		type: 'tool_call',
+		message: `Found ${matches.length} notes with #${tag}`,
+		detail: matches.slice(0, 5).map(p => p.split('/').pop()).join(', ') + (matches.length > 5 ? ', ...' : '')
+	});
+
+	return JSON.stringify({ tag: '#' + tag, matches });
+}
+
 function isFileExcluded(filePath: string, excludedFolders: string[]): boolean {
 	for (const folder of excludedFolders) {
 		const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
@@ -785,7 +1134,7 @@ export async function runContextAgent(
 	embeddingIndex: EmbeddingIndex | null,
 	apiKey: string,
 	embeddingModel: EmbeddingModel,
-	keywordLimit: number,
+	toolConfig: ScoutToolConfig,
 	onProgress: (event: AgentProgressEvent) => void
 ): Promise<ContextAgentResult> {
 	const context: ToolHandlerContext = {
@@ -798,7 +1147,7 @@ export async function runContextAgent(
 		fetchedNotes: new Set([currentFile.path]),
 		currentFilePath: currentFile.path,
 		currentFileContent,
-		keywordLimit
+		toolConfig
 	};
 
 	// Build initial context with current note info
@@ -834,6 +1183,7 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 		});
 
 		// Call OpenAI with tools - enable parallel tool calls
+		const availableTools = getAvailableTools(toolConfig);
 		const response = await requestUrl({
 			url: 'https://api.openai.com/v1/chat/completions',
 			method: 'POST',
@@ -844,7 +1194,7 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 			body: JSON.stringify({
 				model: config.scoutModel === 'same' ? 'gpt-4o-mini' : config.scoutModel,
 				messages: messages,
-				tools: CONTEXT_AGENT_TOOLS,
+				tools: availableTools,
 				tool_choice: 'auto',
 				parallel_tool_calls: true
 			}),
