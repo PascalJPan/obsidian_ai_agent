@@ -7,7 +7,13 @@ import { TFile } from 'obsidian';
 // Type definitions
 export type ContextScope = 'current' | 'linked' | 'folder';  // Legacy - kept for backwards compatibility
 export type EditableScope = 'current' | 'linked' | 'context';
-export type Mode = 'edit' | 'agentic';
+
+// Agent toggle states
+export interface AgentToggles {
+	scout: boolean;  // Scout Agent for vault exploration
+	web: boolean;    // Web Agent for external research
+	task: boolean;   // Task Agent for answering/editing
+}
 
 // New context scope configuration
 export type LinkDepth = 0 | 1 | 2 | 3;

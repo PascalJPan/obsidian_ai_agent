@@ -54,6 +54,12 @@
 - [x] **Send button centering** - Centered send button vertically in chat input box
 - [x] **Scout agent tool configuration** - Settings UI for enabling/disabling individual scout tools
 - [x] **Vault tags visibility** - Checkbox for showing all vault tags to AI
+- [x] **Agent Toggle Buttons** - Replaced Focused/Agentic radio with 3 independent agent toggles (Scout, Web, Task):
+  - Each agent can be enabled/disabled independently
+  - All agents off → send button disabled
+  - Toggle states persist across sessions
+  - Default: Scout OFF, Web OFF, Task ON
+  - Copy button in Scout results to copy all selected note contents
 
 ## Architecture Overview
 
@@ -61,11 +67,13 @@ This is an Obsidian plugin that provides an agentic AI assistant for note editin
 
 ## Key Concepts
 
-### Modes
-- **Standard Mode**: Uses configured context scope (link depth, folder, semantic)
-- **Agentic Mode**: AI Scout Agent explores vault to find relevant context
+### Agent Toggles (`AgentToggles`)
+Three independent agent toggles control the execution pipeline:
+- **Scout Agent** (`scout`): Explores vault to find relevant context. When OFF, uses manual context selection.
+- **Web Agent** (`web`): Searches the web for external information.
+- **Task Agent** (`task`): Executes the actual task (answer questions or propose edits).
 
-In both modes, the Task Agent can answer questions or propose edits based on the user's request.
+Default: Scout OFF, Web OFF, Task ON. At least one agent must be enabled to send a message.
 
 ### Scopes
 - **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as context
