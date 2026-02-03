@@ -50,9 +50,14 @@ import {
 	// Task Agent types
 	TaskAgentConfig,
 	TaskAgentInput,
-	TaskAgentResult
+	TaskAgentResult,
+	// Pipeline types
+	PipelineContext,
+	NoteSelectionMetadata,
+	EnhancedWebSource,
+	UserClarificationResponse
 } from './src/types';
-import { runContextAgent } from './src/ai/contextAgent';
+import { runContextAgent, continueContextAgent } from './src/ai/contextAgent';
 import { runWebAgent, formatWebContextForPrompt, WebAgentConfig } from './src/ai/webAgent';
 import { runTaskAgent } from './src/ai/taskAgent';
 import {
@@ -123,8 +128,11 @@ interface MyPluginSettings {
 	scoutToolGetLinksRecursive: boolean;
 	scoutToolViewAllNotes: boolean;        // View all note names with frontmatter
 	scoutToolExploreVault: boolean;        // Explore folders and tags
+	scoutToolListAllTags: boolean;         // List all tags in vault
+	scoutToolAskUser: boolean;             // Ask user clarifying questions
 	scoutSemanticLimit: number;            // Max results for semantic search
 	scoutListNotesLimit: number;           // Max results for list_notes
+	scoutShowTokenBudget: boolean;         // Show token budget in scout prompts
 	// Web Agent settings
 	webAgentEnabled: boolean;              // Master toggle (default: false, opt-in)
 	webAgentSearchApi: SearchApiType;      // 'serper' | 'brave' | 'tavily'
@@ -133,6 +141,8 @@ interface MyPluginSettings {
 	webAgentFetchLimit: number;            // Max pages to fetch in full (default: 3)
 	webAgentTokenBudget: number;           // Max tokens for web content (default: 8000)
 	webAgentAutoSearch: boolean;           // Automatically search when needed (default: true)
+	webAgentMinFetchPages: number;         // Minimum pages to fetch (1-3, default: 1)
+	webAgentMaxQueryRetries: number;       // Max query reformulation retries (0-2, default: 1)
 	// Agent toggle states (persisted)
 	agentToggles: AgentToggles;            // Which agents are enabled
 }
@@ -178,8 +188,11 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	scoutToolGetLinksRecursive: true,
 	scoutToolViewAllNotes: true,
 	scoutToolExploreVault: true,
+	scoutToolListAllTags: true,
+	scoutToolAskUser: true,
 	scoutSemanticLimit: 10,
 	scoutListNotesLimit: 30,
+	scoutShowTokenBudget: true,
 	// Web Agent settings - opt-in by default
 	webAgentEnabled: false,
 	webAgentSearchApi: 'openai',
@@ -188,6 +201,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	webAgentFetchLimit: 3,
 	webAgentTokenBudget: 8000,
 	webAgentAutoSearch: true,
+	webAgentMinFetchPages: 1,
+	webAgentMaxQueryRetries: 1,
 	// Agent toggle defaults: Scout OFF, Web OFF, Task ON
 	agentToggles: { scout: false, web: false, task: true }
 }
@@ -1956,6 +1971,14 @@ class AIAssistantView extends ItemView {
 	private scoutMaxNotesLabel: HTMLSpanElement | null = null;
 	// Manual notes picker
 	private manualNotesContainer: HTMLDivElement | null = null;
+	// User clarification UI (for ask_user tool)
+	private clarificationContainer: HTMLDivElement | null = null;
+	// Pending scout state for ask_user resumption
+	private pendingScoutState: {
+		resumeState: string;
+		userMessage: string;
+		file: TFile;
+	} | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: MyPlugin) {
 		super(leaf);
@@ -3230,15 +3253,51 @@ class AIAssistantView extends ItemView {
 		const loadingEl = !scout ? this.addLoadingIndicator() : null;
 
 		try {
+			// Initialize pipeline context for tracking across phases
+			const pipelineContext: PipelineContext = {
+				tokenAccounting: {
+					scoutTokens: 0,
+					webTokens: 0,
+					taskTokens: 0,
+					totalTokens: 0
+				}
+			};
+
 			// Phase 1: Get context (Scout or manual)
 			let context: string;
 			let selectedPaths: string[] = [];
+			let selectedNotes: NoteSelectionMetadata[] = [];
 
 			if (scout) {
 				// Scout Agent explores the vault
 				const scoutResult = await this.runScoutAgentPhase(file, userMessage);
+
+				// Handle ask_user pause state
+				if (scoutResult.status === 'waiting_for_user' && scoutResult.userQuestion) {
+					// Store state and show question UI
+					this.pendingScoutState = {
+						resumeState: scoutResult._resumeState || '',
+						userMessage,
+						file
+					};
+					this.showUserClarificationUI(scoutResult.userQuestion);
+					this.setLoading(false);
+					return;
+				}
+
 				selectedPaths = scoutResult.selectedPaths;
+				selectedNotes = scoutResult.selectedNotes;
 				context = await this.buildContextFromPaths(selectedPaths, userMessage);
+
+				// Populate pipeline context with Scout metadata
+				pipelineContext.scout = {
+					selectedNotes: scoutResult.selectedNotes,
+					reasoning: scoutResult.reasoning,
+					confidence: scoutResult.confidence,
+					explorationSummary: scoutResult.explorationSummary,
+					tokensUsed: scoutResult.tokensUsed || 0
+				};
+				pipelineContext.tokenAccounting.scoutTokens = scoutResult.tokensUsed || 0;
 			} else {
 				// Manual context selection
 				const tokenLimit = this.plugin.settings.taskAgentTokenLimit;
@@ -3274,6 +3333,21 @@ class AIAssistantView extends ItemView {
 				if (webResult && webResult.searchPerformed && webResult.webContext) {
 					context = this.mergeWebContext(context, webResult);
 				}
+
+				// Populate pipeline context with Web metadata (only if we got a result)
+				if (webResult) {
+					pipelineContext.web = {
+						searchPerformed: webResult.searchPerformed,
+						evaluationReasoning: webResult.evaluationReasoning,
+						searchQueries: webResult.searchQueries || [],
+						sources: webResult.sources.map(s => ({
+							...s,
+							fetchedAt: new Date().toISOString()
+						})),
+						tokensUsed: webResult.tokensUsed
+					};
+					pipelineContext.tokenAccounting.webTokens = webResult.tokensUsed;
+				}
 			}
 
 			// Phase 3: Task Agent (if enabled)
@@ -3282,7 +3356,7 @@ class AIAssistantView extends ItemView {
 				const taskLoadingEl = loadingEl || this.addLoadingIndicator();
 
 				try {
-					await this.handleEditModeWithWebSources(context, file.path, webResult?.sources);
+					await this.handleEditModeWithWebSourcesAndContext(context, file.path, webResult?.sources, pipelineContext);
 				} finally {
 					if (!loadingEl) this.removeLoadingIndicator(taskLoadingEl);
 				}
@@ -3311,7 +3385,9 @@ class AIAssistantView extends ItemView {
 				? this.plugin.settings.aiModel
 				: this.plugin.settings.agenticScoutModel,
 			maxIterations: this.plugin.settings.agenticMaxIterations,
-			maxNotes: this.plugin.settings.agenticMaxNotes
+			maxNotes: this.plugin.settings.agenticMaxNotes,
+			tokenLimit: this.plugin.settings.taskAgentTokenLimit,
+			showTokenBudget: this.plugin.settings.scoutShowTokenBudget
 		};
 
 		const toolConfig: ScoutToolConfig = {
@@ -3323,6 +3399,8 @@ class AIAssistantView extends ItemView {
 			getLinksRecursive: this.plugin.settings.scoutToolGetLinksRecursive,
 			viewAllNotes: this.plugin.settings.scoutToolViewAllNotes,
 			exploreVault: this.plugin.settings.scoutToolExploreVault,
+			listAllTags: this.plugin.settings.scoutToolListAllTags,
+			askUser: this.plugin.settings.scoutToolAskUser,
 			keywordLimit: this.plugin.settings.agenticKeywordLimit,
 			semanticLimit: this.plugin.settings.scoutSemanticLimit,
 			listNotesLimit: this.plugin.settings.scoutListNotesLimit
@@ -3646,7 +3724,9 @@ class AIAssistantView extends ItemView {
 				? this.plugin.settings.aiModel
 				: this.plugin.settings.agenticScoutModel,
 			openaiApiKey: this.plugin.settings.openaiApiKey,
-			autoSearch: this.plugin.settings.webAgentAutoSearch
+			autoSearch: this.plugin.settings.webAgentAutoSearch,
+			minFetchPages: this.plugin.settings.webAgentMinFetchPages,
+			maxQueryRetries: this.plugin.settings.webAgentMaxQueryRetries
 		};
 
 		try {
@@ -3905,6 +3985,351 @@ class AIAssistantView extends ItemView {
 			tokenUsage: agentResult.tokenUsage,
 			webSources
 		});
+	}
+
+	// Handle edit mode with pipeline context (new version with full pipeline awareness)
+	async handleEditModeWithWebSourcesAndContext(context: string, activeFilePath: string, webSources?: WebSource[], pipelineContext?: PipelineContext) {
+		// Build agent configuration
+		const agentConfig: TaskAgentConfig = {
+			model: this.plugin.settings.aiModel,
+			apiKey: this.plugin.settings.openaiApiKey,
+			capabilities: this.capabilities,
+			editableScope: this.editableScope,
+			customPrompts: {
+				character: this.plugin.settings.customPromptCharacter,
+				edit: this.plugin.settings.customPromptEdit
+			},
+			chatHistoryLength: this.plugin.settings.chatHistoryLength,
+			debugMode: this.plugin.settings.debugMode
+		};
+
+		// Build agent input (with web sources and pipeline context)
+		const agentInput: TaskAgentInput = {
+			task: this.taskText,
+			context: context,
+			chatHistory: this.chatMessages,
+			webSources: webSources,
+			pipelineContext: pipelineContext
+		};
+
+		// Call the Task Agent
+		const agentResult = await runTaskAgent(
+			agentInput,
+			agentConfig,
+			this.plugin.logger
+		);
+
+		// Update pipeline token accounting
+		if (pipelineContext && agentResult.tokenUsage) {
+			pipelineContext.tokenAccounting.taskTokens = agentResult.tokenUsage.totalTokens;
+			pipelineContext.tokenAccounting.totalTokens =
+				pipelineContext.tokenAccounting.scoutTokens +
+				pipelineContext.tokenAccounting.webTokens +
+				pipelineContext.tokenAccounting.taskTokens;
+		}
+
+		// Handle agent error
+		if (!agentResult.success) {
+			throw new Error(agentResult.error || 'Task Agent failed');
+		}
+
+		// Handle answer response (no edits)
+		if (!agentResult.edits || agentResult.edits.length === 0) {
+			this.addMessageToChat('assistant', agentResult.summary, {
+				activeFile: activeFilePath,
+				proposedEdits: [],
+				editResults: { success: 0, failed: 0, failures: [] },
+				tokenUsage: agentResult.tokenUsage,
+				webSources
+			});
+			return;
+		}
+
+		// Validate edits (vault-specific operation)
+		let validatedEdits = await this.plugin.validateEdits(agentResult.edits);
+
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile) {
+			validatedEdits = this.plugin.filterEditsByRulesWithConfig(
+				validatedEdits,
+				activeFile,
+				this.editableScope,
+				this.capabilities,
+				this.contextScopeConfig
+			);
+		}
+
+		const navigationEdits = validatedEdits.filter(e => !e.error && e.instruction.position === 'open');
+		const contentEdits = validatedEdits.filter(e => e.instruction.position !== 'open');
+
+		let navigationSuccess = 0;
+		for (const nav of navigationEdits) {
+			const navFile = nav.resolvedFile;
+			if (navFile) {
+				try {
+					await this.app.workspace.getLeaf('tab').openFile(navFile);
+					navigationSuccess++;
+				} catch (e) {
+					nav.error = `Failed to open note: ${(e as Error).message}`;
+				}
+			} else {
+				nav.error = `Note not found: ${nav.instruction.file}`;
+			}
+		}
+
+		const result = await this.plugin.insertEditBlocks(contentEdits);
+		result.success += navigationSuccess;
+
+		const fileCount = new Set(validatedEdits.filter(e => !e.error).map(e => e.instruction.file)).size;
+		const failedEdits = validatedEdits.filter(e => e.error);
+
+		let responseText = `**✓ ${result.success}** edit${result.success !== 1 ? 's' : ''} • **📄 ${fileCount}** file${fileCount !== 1 ? 's' : ''}`;
+
+		const searchTag = this.plugin.settings.pendingEditTag;
+		responseText += ` • [View all](obsidian://search?query=${encodeURIComponent(searchTag)})`;
+
+		responseText += `\n\n${agentResult.summary}`;
+
+		if (failedEdits.length > 0) {
+			responseText += `\n\n**⚠ ${failedEdits.length} failed:**\n`;
+			for (const edit of failedEdits) {
+				responseText += `- ${edit.instruction.file}: ${edit.error}\n`;
+			}
+		}
+
+		this.addMessageToChat('assistant', responseText, {
+			activeFile: activeFilePath,
+			proposedEdits: agentResult.edits,
+			editResults: {
+				success: result.success,
+				failed: result.failed + navigationEdits.filter(e => e.error).length,
+				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
+			},
+			tokenUsage: agentResult.tokenUsage,
+			webSources
+		});
+	}
+
+	// Show user clarification UI when Scout asks a question
+	showUserClarificationUI(question: { question: string; options?: string[] }) {
+		// Remove any existing clarification UI
+		this.hideClarificationUI();
+
+		// Create container
+		this.clarificationContainer = this.chatContainer?.createDiv({ cls: 'ai-clarification-container' }) || null;
+		if (!this.clarificationContainer) return;
+
+		// Header
+		const header = this.clarificationContainer.createDiv({ cls: 'ai-clarification-header' });
+		header.createSpan({ text: 'Scout needs clarification:', cls: 'ai-clarification-title' });
+
+		// Question text
+		const questionEl = this.clarificationContainer.createDiv({ cls: 'ai-clarification-question' });
+		questionEl.setText(question.question);
+
+		// Options (if provided)
+		if (question.options && question.options.length > 0) {
+			const optionsContainer = this.clarificationContainer.createDiv({ cls: 'ai-clarification-options' });
+
+			question.options.forEach((option, index) => {
+				const optionBtn = optionsContainer.createEl('button', {
+					cls: 'ai-clarification-option',
+					text: `${index + 1}. ${option}`
+				});
+				optionBtn.addEventListener('click', () => {
+					this.handleClarificationResponse(option, index + 1);
+				});
+			});
+		}
+
+		// Text input for custom response
+		const inputContainer = this.clarificationContainer.createDiv({ cls: 'ai-clarification-input-container' });
+		const input = inputContainer.createEl('input', {
+			type: 'text',
+			placeholder: 'Or type your answer...',
+			cls: 'ai-clarification-input'
+		});
+
+		const sendBtn = inputContainer.createEl('button', {
+			text: 'Send',
+			cls: 'ai-clarification-send'
+		});
+
+		const handleSend = () => {
+			const value = input.value.trim();
+			if (value) {
+				this.handleClarificationResponse(value);
+			}
+		};
+
+		sendBtn.addEventListener('click', handleSend);
+		input.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				handleSend();
+			}
+		});
+
+		// Focus input
+		input.focus();
+
+		// Scroll to show the clarification UI
+		this.scrollChatToBottom();
+	}
+
+	// Hide clarification UI
+	hideClarificationUI() {
+		if (this.clarificationContainer) {
+			this.clarificationContainer.remove();
+			this.clarificationContainer = null;
+		}
+	}
+
+	// Handle user's response to clarification question
+	async handleClarificationResponse(answer: string, selectedOption?: number) {
+		if (!this.pendingScoutState) {
+			console.error('No pending scout state to resume');
+			return;
+		}
+
+		// Hide the clarification UI
+		this.hideClarificationUI();
+
+		const { resumeState, userMessage, file } = this.pendingScoutState;
+		this.pendingScoutState = null;
+
+		this.setLoading(true);
+
+		try {
+			const agenticConfig: AgenticModeConfig = {
+				scoutModel: this.plugin.settings.agenticScoutModel === 'same'
+					? this.plugin.settings.aiModel
+					: this.plugin.settings.agenticScoutModel,
+				maxIterations: this.plugin.settings.agenticMaxIterations,
+				maxNotes: this.plugin.settings.agenticMaxNotes,
+				tokenLimit: this.plugin.settings.taskAgentTokenLimit,
+				showTokenBudget: this.plugin.settings.scoutShowTokenBudget
+			};
+
+			const toolConfig: ScoutToolConfig = {
+				listNotes: this.plugin.settings.scoutToolListNotes,
+				searchKeyword: this.plugin.settings.scoutToolSearchKeyword,
+				searchSemantic: this.plugin.settings.scoutToolSearchSemantic,
+				searchTaskRelevant: this.plugin.settings.scoutToolSearchTaskRelevant,
+				getLinks: this.plugin.settings.scoutToolGetLinks,
+				getLinksRecursive: this.plugin.settings.scoutToolGetLinksRecursive,
+				viewAllNotes: this.plugin.settings.scoutToolViewAllNotes,
+				exploreVault: this.plugin.settings.scoutToolExploreVault,
+				listAllTags: this.plugin.settings.scoutToolListAllTags,
+				askUser: this.plugin.settings.scoutToolAskUser,
+				keywordLimit: this.plugin.settings.agenticKeywordLimit,
+				semanticLimit: this.plugin.settings.scoutSemanticLimit,
+				listNotesLimit: this.plugin.settings.scoutListNotesLimit
+			};
+
+			const currentContent = await this.app.vault.cachedRead(file);
+
+			// Continue the scout agent with user's response
+			const scoutResult = await continueContextAgent(
+				resumeState,
+				{ answer, selectedOption },
+				userMessage,
+				file,
+				currentContent,
+				agenticConfig,
+				this.app.vault,
+				this.app.metadataCache,
+				this.plugin.settings.excludedFolders,
+				this.plugin.embeddingIndex,
+				this.plugin.settings.openaiApiKey,
+				this.plugin.settings.embeddingModel,
+				toolConfig,
+				(event) => {
+					if (event.type === 'tool_call' || event.type === 'iteration') {
+						this.showAgentProgress(event.message, event.detail);
+					}
+				}
+			);
+
+			// Check if still waiting (another ask_user)
+			if (scoutResult.status === 'waiting_for_user' && scoutResult.userQuestion) {
+				this.pendingScoutState = {
+					resumeState: scoutResult._resumeState || '',
+					userMessage,
+					file
+				};
+				this.showUserClarificationUI(scoutResult.userQuestion);
+				this.setLoading(false);
+				return;
+			}
+
+			// Scout complete - continue with the rest of the pipeline
+			this.completeAgentProgress(scoutResult.selectedPaths.length, scoutResult.reasoning, scoutResult.selectedPaths);
+
+			// Build pipeline context
+			const pipelineContext: PipelineContext = {
+				scout: {
+					selectedNotes: scoutResult.selectedNotes,
+					reasoning: scoutResult.reasoning,
+					confidence: scoutResult.confidence,
+					explorationSummary: scoutResult.explorationSummary,
+					tokensUsed: scoutResult.tokensUsed || 0
+				},
+				tokenAccounting: {
+					scoutTokens: scoutResult.tokensUsed || 0,
+					webTokens: 0,
+					taskTokens: 0,
+					totalTokens: scoutResult.tokensUsed || 0
+				}
+			};
+
+			// Build context
+			const context = await this.buildContextFromPaths(scoutResult.selectedPaths, userMessage);
+
+			// Phase 2: Web Agent (if enabled)
+			let webResult: WebAgentResult | null = null;
+			if (this.agentToggles.web) {
+				webResult = await this.runWebAgentPhase(userMessage, context);
+
+				// Merge web context if search was performed
+				let finalContext = context;
+				if (webResult && webResult.searchPerformed && webResult.webContext) {
+					finalContext = this.mergeWebContext(context, webResult);
+				}
+
+				// Populate pipeline context with Web metadata (only if we got a result)
+				if (webResult) {
+					pipelineContext.web = {
+						searchPerformed: webResult.searchPerformed,
+						evaluationReasoning: webResult.evaluationReasoning,
+						searchQueries: webResult.searchQueries || [],
+						sources: webResult.sources.map(s => ({
+							...s,
+							fetchedAt: new Date().toISOString()
+						})),
+						tokensUsed: webResult.tokensUsed
+					};
+					pipelineContext.tokenAccounting.webTokens = webResult.tokensUsed;
+				}
+
+				// Use final context for task agent
+				if (this.agentToggles.task) {
+					await this.handleEditModeWithWebSourcesAndContext(finalContext, file.path, webResult?.sources, pipelineContext);
+				} else {
+					this.displayAgentOnlyResults(scoutResult.selectedPaths, webResult);
+				}
+			} else if (this.agentToggles.task) {
+				// No web agent, but task agent enabled
+				await this.handleEditModeWithWebSourcesAndContext(context, file.path, undefined, pipelineContext);
+			} else {
+				// Only scout ran
+				this.displayAgentOnlyResults(scoutResult.selectedPaths, null);
+			}
+		} catch (error) {
+			console.error('Clarification response error:', error);
+			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file.path });
+		} finally {
+			this.setLoading(false);
+		}
 	}
 
 	// Build context string from explicit list of file paths
@@ -4820,6 +5245,16 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		new Setting(scoutContent)
+			.setName('Show Token Budget')
+			.setDesc('Include token budget information in scout agent prompts to help with note selection')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.scoutShowTokenBudget)
+				.onChange(async (value) => {
+					this.plugin.settings.scoutShowTokenBudget = value;
+					await this.plugin.saveSettings();
+				}));
+
 		// Scout tool toggles
 		scoutContent.createEl('div', { text: 'Available Tools', cls: 'setting-item-name' });
 		scoutContent.createEl('div', {
@@ -4924,6 +5359,30 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		const exploreLabel = exploreItem.createDiv();
 		exploreLabel.createEl('div', { text: 'Explore Vault', cls: 'ai-settings-tool-name' });
 		exploreLabel.createEl('div', { text: 'Folders and tags', cls: 'ai-settings-tool-desc' });
+
+		// List All Tags toggle
+		const listTagsItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const listTagsToggle = listTagsItem.createEl('input', { type: 'checkbox' });
+		listTagsToggle.checked = this.plugin.settings.scoutToolListAllTags;
+		listTagsToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolListAllTags = listTagsToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const listTagsLabel = listTagsItem.createDiv();
+		listTagsLabel.createEl('div', { text: 'List All Tags', cls: 'ai-settings-tool-name' });
+		listTagsLabel.createEl('div', { text: 'Discover vault tags', cls: 'ai-settings-tool-desc' });
+
+		// Ask User toggle
+		const askUserItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
+		const askUserToggle = askUserItem.createEl('input', { type: 'checkbox' });
+		askUserToggle.checked = this.plugin.settings.scoutToolAskUser;
+		askUserToggle.addEventListener('change', async () => {
+			this.plugin.settings.scoutToolAskUser = askUserToggle.checked;
+			await this.plugin.saveSettings();
+		});
+		const askUserLabel = askUserItem.createDiv();
+		askUserLabel.createEl('div', { text: 'Ask User', cls: 'ai-settings-tool-name' });
+		askUserLabel.createEl('div', { text: 'Clarify ambiguous tasks', cls: 'ai-settings-tool-desc' });
 
 		// Expected tokens display
 		const expectedTokensEl = scoutContent.createDiv({ cls: 'ai-settings-expected-tokens' });
@@ -5128,6 +5587,30 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.webAgentAutoSearch)
 				.onChange(async (value) => {
 					this.plugin.settings.webAgentAutoSearch = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(webAgentLimitsContent)
+			.setName('Minimum Pages to Fetch')
+			.setDesc('Enforce minimum number of pages to fetch even if agent selects fewer (1-3)')
+			.addSlider(slider => slider
+				.setLimits(1, 3, 1)
+				.setValue(this.plugin.settings.webAgentMinFetchPages)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentMinFetchPages = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(webAgentLimitsContent)
+			.setName('Query Reformulation Retries')
+			.setDesc('If search yields few results, retry with different query (0-2 retries)')
+			.addSlider(slider => slider
+				.setLimits(0, 2, 1)
+				.setValue(this.plugin.settings.webAgentMaxQueryRetries)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentMaxQueryRetries = value;
 					await this.plugin.saveSettings();
 				}));
 
