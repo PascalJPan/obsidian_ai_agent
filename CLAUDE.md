@@ -17,7 +17,7 @@
   - Default iterations increased to 3, slider range 2-5
   - Parallel tool calls enabled for efficiency
   - `agenticKeywordLimit` setting (3-20) for keyword search results
-- [x] **Token limit enforcement** - Renamed `tokenWarningThreshold` to `answerEditTokenLimit`:
+- [x] **Token limit enforcement** - Renamed `tokenWarningThreshold` to `taskAgentTokenLimit`:
   - Now a hard limit, not just a warning
   - Removes notes by priority when limit exceeded (manual → semantic → folder → linked → current)
   - Shows toast notification when notes are removed
@@ -36,14 +36,14 @@
   - Classifies task type and selects which agents to run
   - Enables multi-round orchestration (Web → Scout → Edit)
   - Strict modularity: clear input/output interfaces per agent
-  - Answer/Edit stay combined (no split needed)
+  - Task Agent handles both answers and edits (no split needed)
   - Smart context management to reduce token usage
 
 ### UI/UX Improvements
 - [x] **Move edit options to settings** - Moved edit rules toggle from chat tab to Obsidian settings panel
 
 ### Agentic Mode Enhancements
-- [x] **Web Agent** - Modular web search pipeline phase (Scout → Web → Answer/Edit)
+- [x] **Web Agent** - Modular web search pipeline phase (Scout → Web → Task)
 - [x] **View all note names** - `view_all_notes` tool lists all note names with alias/description from YAML frontmatter
 - [x] **Vault exploration tool** - `explore_vault` tool for listing folder contents or finding notes by tag
 - [x] **Open note capability** - `canNavigate` capability allows AI to open notes in new tabs via `open` position
@@ -57,13 +57,15 @@
 
 ## Architecture Overview
 
-This is an Obsidian plugin that provides an agentic AI assistant for note editing and Q&A. It uses OpenAI's API (configurable model) and implements a pending edit system where AI-proposed changes are inserted as reviewable blocks.
+This is an Obsidian plugin that provides an agentic AI assistant for note editing and answering questions. It uses OpenAI's API (configurable model) and implements a pending edit system where AI-proposed changes are inserted as reviewable blocks.
 
 ## Key Concepts
 
 ### Modes
-- **Q&A Mode**: Simple question answering based on note context
-- **Edit Mode**: AI proposes structured edits as JSON, which get converted to pending edit blocks
+- **Standard Mode**: Uses configured context scope (link depth, folder, semantic)
+- **Agentic Mode**: AI Scout Agent explores vault to find relevant context
+
+In both modes, the Task Agent can answer questions or propose edits based on the user's request.
 
 ### Scopes
 - **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as context
@@ -131,14 +133,20 @@ Wraps EditInstruction with resolved file, current/new content, and error state.
 - `normalizeContextScope()` - Converts legacy `ContextScope` to new `ContextScopeConfig`
 
 **AIAssistantView**
-- `handleEditMode()` - Orchestrates edit flow: API call → parse → validate → filter → insert blocks
-- `handleQAMode()` - Simple Q&A flow
+- `handleEditMode()` - Orchestrates Task Agent: calls agent → validates → filters → inserts blocks
 - `buildMessagesWithHistory()` - Builds API messages array with rich chat history context
 
 ### src/ai/prompts.ts (pure functions)
-- `buildEditSystemPrompt()` - Constructs system prompt with dynamic rules
+- `buildScopeInstruction()` - Generates scope rules text
+- `buildPositionTypes()` - Generates position types based on capabilities
+- `buildEditRules()` - Generates general edit rules
 - `buildForbiddenActions()` - Generates explicit warnings for disabled capabilities
-- `buildQASystemPrompt()` - Constructs system prompt for Q&A mode
+
+### src/ai/taskAgent.ts (Task Agent)
+- `runTaskAgent()` - Main entry point for Phase 3 (answer or edit)
+- `buildTaskAgentSystemPrompt()` - Constructs system prompt with dynamic rules
+- `buildMessagesFromHistory()` - Builds messages array with chat history
+- `parseAIEditResponse()` - Parses JSON response from AI
 
 ### src/ai/validation.ts (pure functions)
 - `computeNewContent()` - Applies position-based edit to content string
@@ -212,8 +220,9 @@ src/
   types.ts           - Shared type definitions
   ai/
     context.ts       - Context utilities (addLineNumbers)
-    contextAgent.ts  - Agentic mode Phase 1: vault exploration agent (Scout)
-    webAgent.ts      - Agentic mode Phase 2: web research agent
+    contextAgent.ts  - Agentic mode Phase 1: vault exploration agent (Scout Agent)
+    webAgent.ts      - Agentic mode Phase 2: web research agent (Web Agent)
+    taskAgent.ts     - Agentic mode Phase 3: answer/edit execution (Task Agent)
     searchApi.ts     - Search API wrapper (OpenAI, Serper, Brave, Tavily) + page fetcher
     prompts.ts       - Prompt constants and builders
     validation.ts    - Edit validation (computeNewContent, determineEditType, escapeRegex)
@@ -281,5 +290,26 @@ An optional AI agent that searches the web for external information when vault c
 - `webAgentTokenBudget` (2000-20000, default 8000): Max tokens for web content
 - `webAgentAutoSearch`: Automatically search when needed (default: true)
 
-### Phase 3: Task Agent
-Uses the context gathered in Phase 1 and 2 to execute the actual task (Q&A or Edit mode).
+### Phase 3: Task Agent (`taskAgent.ts`)
+Uses the context gathered in Phase 1 and 2 to execute the actual task.
+
+**Entry Function:**
+```typescript
+export async function runTaskAgent(
+  input: TaskAgentInput,
+  config: TaskAgentConfig,
+  logger?: Logger,
+  onProgress?: (event: AgentProgressEvent) => void
+): Promise<TaskAgentResult>
+```
+
+**Input:** Task string, context (formatted notes), chat history, optional web sources
+**Output:** Success flag, edits array (if any), summary text, token usage
+
+**Behavior:**
+- Builds system prompt with capabilities and scope rules
+- Includes chat history for multi-turn conversations
+- Calls OpenAI API with JSON response format
+- Returns structured result for validation/insertion by main.ts
+
+The Task Agent decides whether to answer a question (empty edits) or propose changes (edits array) based on the user's request.

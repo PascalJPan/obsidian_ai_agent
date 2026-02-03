@@ -250,5 +250,37 @@ export interface WebAgentProgressEvent {
 export interface PipelineConfig {
 	scoutEnabled: boolean;         // Run Scout Agent (default: true in agentic mode)
 	webEnabled: boolean;           // Run Web Agent (default: false, opt-in)
-	answerEnabled: boolean;        // Run Answer/Edit Agent (default: true)
+	taskEnabled: boolean;          // Run Task Agent (default: true)
+}
+
+// ============================================
+// Task Agent Types
+// ============================================
+
+export interface TaskAgentConfig {
+	model: string;
+	apiKey: string;
+	capabilities: AICapabilities;
+	editableScope: EditableScope;
+	customPrompts?: {
+		character?: string;
+		edit?: string;
+	};
+	chatHistoryLength: number;
+	debugMode: boolean;
+}
+
+export interface TaskAgentInput {
+	task: string;               // User's message (for logging)
+	context: string;            // Formatted notes with line numbers (includes task section)
+	chatHistory: ChatMessage[]; // Previous conversation
+	webSources?: WebSource[];   // Optional web context (for citation instructions)
+}
+
+export interface TaskAgentResult {
+	success: boolean;
+	edits: EditInstruction[];   // Raw edits (not validated yet - validation needs vault)
+	summary: string;
+	tokenUsage?: TokenUsage;
+	error?: string;
 }

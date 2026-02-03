@@ -509,7 +509,7 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 }
 
 /**
- * Format web context for inclusion in the Answer/Edit prompt
+ * Format web context for inclusion in the Task Agent prompt
  */
 export function formatWebContextForPrompt(result: WebAgentResult): string {
 	if (!result.searchPerformed || !result.webContext) {

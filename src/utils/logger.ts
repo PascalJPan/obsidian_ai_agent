@@ -14,7 +14,8 @@ export type LogCategory =
 	| 'API'          // API calls
 	| 'EDIT'         // Edit insertion and resolution
 	| 'PARSE'        // Response parsing
-	| 'TOKEN_LIMIT'; // Token limit enforcement
+	| 'TOKEN_LIMIT'  // Token limit enforcement
+	| 'WEB_AGENT';   // Web Agent operations
 
 export interface Logger {
 	log: (category: LogCategory, message: string, data?: unknown) => void;

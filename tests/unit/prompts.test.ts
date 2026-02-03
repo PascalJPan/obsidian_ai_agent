@@ -17,13 +17,15 @@ describe('buildForbiddenActions', () => {
 	const allCapabilities: AICapabilities = {
 		canAdd: true,
 		canDelete: true,
-		canCreate: true
+		canCreate: true,
+		canNavigate: true
 	};
 
 	const noCapabilities: AICapabilities = {
 		canAdd: false,
 		canDelete: false,
-		canCreate: false
+		canCreate: false,
+		canNavigate: false
 	};
 
 	it('returns empty string when all capabilities enabled and scope is not current', () => {
@@ -58,9 +60,9 @@ describe('buildForbiddenActions', () => {
 		expect(result).toContain('DO NOT edit any file except the CURRENT NOTE');
 	});
 
-	it('returns Q&A ONLY MODE when all capabilities disabled', () => {
+	it('returns ANSWER ONLY MODE when all capabilities disabled', () => {
 		const result = buildForbiddenActions(noCapabilities, 'current');
-		expect(result).toContain('Q&A ONLY MODE');
+		expect(result).toContain('ANSWER ONLY MODE');
 		expect(result).toContain('All edit capabilities are disabled');
 		expect(result).toContain('ONLY answer questions');
 		expect(result).toContain('empty edits array');
