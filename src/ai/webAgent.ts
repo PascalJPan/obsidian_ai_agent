@@ -25,6 +25,8 @@ export interface WebAgentConfig {
 	model: string;            // LLM model for agent reasoning
 	openaiApiKey: string;     // OpenAI API key for LLM calls
 	autoSearch: boolean;      // Whether to automatically search when needed
+	minFetchPages: number;    // Minimum pages to fetch (1-3)
+	maxQueryRetries: number;  // Max query reformulation retries (0-2)
 }
 
 export interface WebSource {
@@ -44,6 +46,9 @@ export interface WebAgentResult {
 		message: string;
 		detail: string;
 	};
+	// Pipeline metadata
+	searchQueries?: string[];        // All queries attempted
+	evaluationReasoning?: string;    // Why search was/wasn't needed
 }
 
 export interface WebAgentProgressEvent {
@@ -162,14 +167,37 @@ const WEB_AGENT_TOOLS = [
 /**
  * Build system prompt for the Web Agent
  */
-function buildWebAgentSystemPrompt(config: WebAgentConfig): string {
+function buildWebAgentSystemPrompt(config: WebAgentConfig, autoSearchMode: boolean): string {
 	const currentDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 	const currentYear = new Date().getFullYear();
 
-	return `You are a Web Research Agent. Your job is to determine if external web search is needed and gather relevant information.
+	let prompt = `You are a Web Research Agent. Your job is to ${autoSearchMode ? 'search the web and gather relevant information' : 'determine if external web search is needed and gather relevant information'}.
 
 TODAY'S DATE: ${currentDate}
-When the user asks about "current", "latest", or "recent" information, use ${currentYear} as the reference year.
+When the user asks about "current", "latest", or "recent" information, use ${currentYear} as the reference year.`;
+
+	if (autoSearchMode) {
+		prompt += `
+
+## AUTO-SEARCH MODE ENABLED
+Skip evaluation - proceed directly to web_search(). Do NOT call evaluate_context().
+
+## YOUR WORKFLOW
+
+1. Call web_search() with a specific query.
+   - Be specific: "React 19 new features ${currentYear}" not "React"
+   - Include version numbers, dates, or specific terms when relevant
+
+2. After getting results, call select_pages() to choose which to fetch in full.
+   - Prefer official documentation, reputable tech sites
+   - Select at least ${config.minFetchPages} page${config.minFetchPages > 1 ? 's' : ''} (minimum enforcement)
+   - Max ${config.fetchLimit} pages (you have ${config.tokenBudget} tokens budget)
+
+3. Finally, call finalize_web_context() with compiled findings.
+   - Be concise but include all relevant information
+   - Always cite sources`;
+	} else {
+		prompt += `
 
 ## YOUR WORKFLOW
 
@@ -184,21 +212,32 @@ When the user asks about "current", "latest", or "recent" information, use ${cur
 
 3. After getting results, call select_pages() to choose which to fetch in full.
    - Prefer official documentation, reputable tech sites
+   - Select at least ${config.minFetchPages} page${config.minFetchPages > 1 ? 's' : ''} (minimum enforcement)
    - Max ${config.fetchLimit} pages (you have ${config.tokenBudget} tokens budget)
 
 4. Finally, call finalize_web_context() with compiled findings.
    - Be concise but include all relevant information
-   - Always cite sources
+   - Always cite sources`;
+	}
+
+	prompt += `
 
 ## LIMITS
 - Max search results: ${config.snippetLimit}
+- Min pages to fetch: ${config.minFetchPages}
 - Max pages to fetch: ${config.fetchLimit}
 - Token budget: ${config.tokenBudget}
 
+## QUERY REFORMULATION
+If a search yields fewer than 3 results, you may try a different query formulation.
+- Use synonyms, broader terms, or different phrasings
+- You have up to ${config.maxQueryRetries} reformulation attempt${config.maxQueryRetries !== 1 ? 's' : ''}
+
 ## IMPORTANT
-- If vault context is sufficient, call evaluate_context with sufficient=true and you're done
-- Don't fabricate information - only use what you find
+${autoSearchMode ? '' : '- If vault context is sufficient, call evaluate_context with sufficient=true and you\'re done\n'}- Don't fabricate information - only use what you find
 - If search fails, report the error and continue without web context`;
+
+	return prompt;
 }
 
 /**
@@ -225,15 +264,30 @@ export async function runWebAgent(
 		};
 	}
 
-	const systemPrompt = buildWebAgentSystemPrompt(config);
+	// Determine if auto-search mode is enabled
+	const autoSearchMode = config.autoSearch;
 
-	const initialPrompt = `## USER TASK
+	const systemPrompt = buildWebAgentSystemPrompt(config, autoSearchMode);
+
+	// Build initial prompt based on mode
+	let initialPrompt: string;
+	if (autoSearchMode) {
+		initialPrompt = `## USER TASK
+${task}
+
+## VAULT CONTEXT (Notes from user's vault)
+${vaultContext.substring(0, 4000)}${vaultContext.length > 4000 ? '\n[... vault context truncated ...]' : ''}
+
+Auto-search enabled. Proceed directly to web_search() with an appropriate query for this task.`;
+	} else {
+		initialPrompt = `## USER TASK
 ${task}
 
 ## VAULT CONTEXT (Notes from user's vault)
 ${vaultContext.substring(0, 4000)}${vaultContext.length > 4000 ? '\n[... vault context truncated ...]' : ''}
 
 Evaluate whether this vault context is sufficient to fully answer the task, or if web search is needed.`;
+	}
 
 	const messages: Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }> = [
 		{ role: 'system', content: systemPrompt },
@@ -242,14 +296,24 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 
 	// State tracking
 	let searchResults: SearchResult[] = [];
-	let fetchedPages: Array<{ url: string; title: string; content: string }> = [];
+	let fetchedPages: Array<{ url: string; title: string; content: string; fetchedAt: string }> = [];
 	let totalTokensUsed = 0;
 	let searchQuery: string | undefined;
 	let finished = false;
-	let maxIterations = 5; // Safety limit
+	let maxIterations = 5 + config.maxQueryRetries; // Base iterations + retry allowance
 	let iteration = 0;
+	let queryRetryCount = 0;
 
-	onProgress({ type: 'evaluating', message: 'Evaluating vault context...' });
+	// Pipeline metadata tracking
+	const searchQueries: string[] = [];
+	let evaluationReasoning: string | undefined;
+
+	// Build tools list - remove evaluate_context if auto-search mode
+	const agentTools = autoSearchMode
+		? WEB_AGENT_TOOLS.filter(t => t.function.name !== 'evaluate_context')
+		: WEB_AGENT_TOOLS;
+
+	onProgress({ type: autoSearchMode ? 'searching' : 'evaluating', message: autoSearchMode ? 'Auto-search enabled, searching...' : 'Evaluating vault context...' });
 
 	while (!finished && iteration < maxIterations) {
 		iteration++;
@@ -265,7 +329,7 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 				body: JSON.stringify({
 					model: config.model,
 					messages: messages,
-					tools: WEB_AGENT_TOOLS,
+					tools: agentTools,
 					tool_choice: 'auto'
 				}),
 			});
@@ -309,6 +373,9 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 							const reasoning = args.reasoning as string;
 							const searchTopics = args.searchTopics as string[] | undefined;
 
+							// Capture evaluation reasoning for pipeline metadata
+							evaluationReasoning = reasoning;
+
 							if (sufficient) {
 								onProgress({
 									type: 'skipped',
@@ -321,7 +388,9 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 									webContext: '',
 									sources: [],
 									tokensUsed: totalTokensUsed,
-									skipReason: reasoning
+									skipReason: reasoning,
+									searchQueries,
+									evaluationReasoning
 								};
 							}
 
@@ -341,6 +410,9 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 						case 'web_search': {
 							const query = args.query as string;
 							searchQuery = query;
+
+							// Track all queries attempted
+							searchQueries.push(query);
 
 							onProgress({
 								type: 'searching',
@@ -362,13 +434,24 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 									detail: searchResults.slice(0, 3).map(r => r.title).join(', ')
 								});
 
-								toolResult = JSON.stringify({
+								// Build response with optional reformulation hint
+								const searchResponse: Record<string, unknown> = {
 									results: searchResults.map(r => ({
 										title: r.title,
 										url: r.url,
 										snippet: r.snippet
 									}))
-								});
+								};
+
+								// Suggest reformulation if few results and retries available
+								if (searchResults.length < 3 && queryRetryCount < config.maxQueryRetries) {
+									searchResponse.suggestReformulation = true;
+									searchResponse.retriesRemaining = config.maxQueryRetries - queryRetryCount;
+									searchResponse.hint = 'Few results found. Consider trying a different query with synonyms, broader terms, or different phrasings.';
+									queryRetryCount++;
+								}
+
+								toolResult = JSON.stringify(searchResponse);
 							} catch (error) {
 								const errorMsg = (error as Error).message;
 								onProgress({
@@ -386,12 +469,27 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 						}
 
 						case 'select_pages': {
-							const selectedUrls = args.selectedUrls as string[];
+							let selectedUrls = args.selectedUrls as string[];
 							const selectReasoning = args.reasoning as string;
+
+							// Enforce minimum fetch pages if agent selected fewer
+							let enforcedMinimum = false;
+							if (selectedUrls.length < config.minFetchPages && searchResults.length > 0) {
+								const availableUrls = searchResults.map(r => r.url);
+								const additionalUrls = availableUrls.filter(url => !selectedUrls.includes(url));
+
+								while (selectedUrls.length < config.minFetchPages && additionalUrls.length > 0) {
+									const nextUrl = additionalUrls.shift();
+									if (nextUrl) {
+										selectedUrls.push(nextUrl);
+										enforcedMinimum = true;
+									}
+								}
+							}
 
 							onProgress({
 								type: 'fetching',
-								message: `Fetching ${selectedUrls.length} pages`,
+								message: `Fetching ${selectedUrls.length} pages${enforcedMinimum ? ' (minimum enforced)' : ''}`,
 								detail: selectReasoning
 							});
 
@@ -410,7 +508,8 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 									fetchedPages.push({
 										url: page.url,
 										title: page.title,
-										content: page.content
+										content: page.content,
+										fetchedAt: new Date().toISOString()
 									});
 									totalTokensUsed += page.tokensUsed;
 								} catch (error) {
@@ -419,14 +518,20 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 								}
 							}
 
-							toolResult = JSON.stringify({
+							const responsePayload: Record<string, unknown> = {
 								fetchedCount: fetchedPages.length,
 								pages: fetchedPages.map(p => ({
 									url: p.url,
 									title: p.title,
 									contentPreview: p.content.substring(0, 500) + '...'
 								}))
-							});
+							};
+
+							if (enforcedMinimum) {
+								responsePayload.note = `Enforced minimum ${config.minFetchPages} pages (agent selected ${(args.selectedUrls as string[]).length})`;
+							}
+
+							toolResult = JSON.stringify(responsePayload);
 							break;
 						}
 
@@ -445,7 +550,9 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 								webContext,
 								sources,
 								tokensUsed: totalTokensUsed,
-								searchQuery
+								searchQuery,
+								searchQueries,
+								evaluationReasoning
 							};
 						}
 
@@ -470,6 +577,8 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 				sources: [],
 				tokensUsed: totalTokensUsed,
 				searchQuery,
+				searchQueries,
+				evaluationReasoning,
 				error: {
 					message: 'Web Agent error',
 					detail: (error as Error).message
@@ -495,7 +604,9 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 			webContext: compiledContext,
 			sources,
 			tokensUsed: totalTokensUsed,
-			searchQuery
+			searchQuery,
+			searchQueries,
+			evaluationReasoning
 		};
 	}
 
@@ -504,7 +615,9 @@ Evaluate whether this vault context is sufficient to fully answer the task, or i
 		webContext: '',
 		sources: [],
 		tokensUsed: 0,
-		skipReason: 'Web Agent completed without gathering web context'
+		skipReason: 'Web Agent completed without gathering web context',
+		searchQueries,
+		evaluationReasoning
 	};
 }
 

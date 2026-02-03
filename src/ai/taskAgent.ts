@@ -22,7 +22,9 @@ import {
 	AgentProgressEvent,
 	TaskAgentConfig,
 	TaskAgentInput,
-	TaskAgentResult
+	TaskAgentResult,
+	PipelineContext,
+	NoteSelectionMetadata
 } from '../types';
 import { Logger } from '../utils/logger';
 import {
@@ -50,7 +52,8 @@ export function buildTaskAgentSystemPrompt(
 	capabilities: AICapabilities,
 	editableScope: EditableScope,
 	customPrompts?: { character?: string; edit?: string },
-	webSources?: WebSource[]
+	webSources?: WebSource[],
+	pipelineContext?: PipelineContext
 ): string {
 	const parts: string[] = [CORE_EDIT_PROMPT];
 
@@ -72,6 +75,12 @@ export function buildTaskAgentSystemPrompt(
 		parts.push(forbiddenSection);
 	}
 
+	// Add prior agent context if available
+	const pipelineSection = buildPipelineAwarenessSection(pipelineContext);
+	if (pipelineSection) {
+		parts.push(pipelineSection);
+	}
+
 	// Add user customizations
 	if (customPrompts?.character?.trim()) {
 		parts.push('\n\n--- Character Instructions ---');
@@ -90,6 +99,84 @@ export function buildTaskAgentSystemPrompt(
 	}
 
 	return parts.join('\n');
+}
+
+/**
+ * Build the pipeline awareness section for system prompt
+ *
+ * This tells the Task Agent what prior agents discovered and why certain notes were selected.
+ */
+function buildPipelineAwarenessSection(pipelineContext?: PipelineContext): string | null {
+	if (!pipelineContext) return null;
+
+	const sections: string[] = [];
+	sections.push('\n\n--- Prior Agent Context ---');
+
+	// Scout Agent section
+	if (pipelineContext.scout) {
+		const scout = pipelineContext.scout;
+		const confidenceText = scout.confidence === 'done' ? 'high confidence' :
+			scout.confidence === 'confident' ? 'moderate confidence' : 'exploring';
+
+		sections.push(`\nSCOUT AGENT: Selected ${scout.selectedNotes.length} notes with ${confidenceText}.`);
+		sections.push(`Reasoning: "${scout.reasoning}"`);
+
+		// Highlight high-relevance notes
+		const highRelevanceNotes = scout.selectedNotes.filter(note => {
+			if (note.scoutMetadata?.semanticScore && note.scoutMetadata.semanticScore > 0.7) return true;
+			if (note.scoutMetadata?.keywordMatchType === 'title') return true;
+			return false;
+		});
+
+		if (highRelevanceNotes.length > 0) {
+			const noteDescriptions = highRelevanceNotes.slice(0, 5).map(note => {
+				const name = note.path.split('/').pop() || note.path;
+				const annotations: string[] = [];
+
+				if (note.scoutMetadata?.semanticScore) {
+					annotations.push(`semantic: ${Math.round(note.scoutMetadata.semanticScore * 100)}%`);
+				}
+				if (note.scoutMetadata?.keywordMatchType) {
+					annotations.push(`keyword: ${note.scoutMetadata.keywordMatchType}`);
+				}
+
+				return `${name}${annotations.length > 0 ? ` [${annotations.join(', ')}]` : ''}`;
+			});
+
+			sections.push(`High-relevance: ${noteDescriptions.join(', ')}`);
+		}
+
+		if (scout.explorationSummary && scout.explorationSummary !== 'No exploration steps performed.') {
+			sections.push(`Exploration: ${scout.explorationSummary}`);
+		}
+	}
+
+	// Web Agent section
+	if (pipelineContext.web && pipelineContext.web.searchPerformed) {
+		const web = pipelineContext.web;
+
+		if (web.searchQueries.length > 0) {
+			sections.push(`\nWEB AGENT: Searched "${web.searchQueries[0]}"${web.searchQueries.length > 1 ? ` (+${web.searchQueries.length - 1} more queries)` : ''}`);
+		}
+
+		if (web.evaluationReasoning) {
+			sections.push(`Why searched: "${web.evaluationReasoning}"`);
+		}
+
+		if (web.sources.length > 0) {
+			sections.push(`Sources: ${web.sources.length} fetched`);
+		}
+	} else if (pipelineContext.web && pipelineContext.web.evaluationReasoning) {
+		sections.push(`\nWEB AGENT: Search skipped.`);
+		sections.push(`Reason: "${pipelineContext.web.evaluationReasoning}"`);
+	}
+
+	sections.push('--- End Prior Agent Context ---');
+
+	// Only return if we have meaningful content
+	if (sections.length <= 2) return null; // Only header and footer
+
+	return sections.join('\n');
 }
 
 /**
@@ -250,12 +337,13 @@ export async function runTaskAgent(
 	logger?: Logger,
 	onProgress?: (event: AgentProgressEvent) => void
 ): Promise<TaskAgentResult> {
-	// Build system prompt
+	// Build system prompt (with pipeline context if available)
 	const systemPrompt = buildTaskAgentSystemPrompt(
 		config.capabilities,
 		config.editableScope,
 		config.customPrompts,
-		input.webSources
+		input.webSources,
+		input.pipelineContext
 	);
 
 	// Build messages with chat history

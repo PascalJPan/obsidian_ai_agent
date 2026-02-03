@@ -122,6 +122,8 @@ export interface AgenticModeConfig {
 	scoutModel: string;       // Model for Phase 1 exploration
 	maxIterations: number;    // 1-10, max tool-calling rounds
 	maxNotes: number;         // 3-50, max notes context agent can select
+	tokenLimit?: number;      // Token budget for scout to be aware of (optional)
+	showTokenBudget?: boolean; // Whether to show token budget in prompts
 }
 
 // Scout agent tool configuration
@@ -134,6 +136,8 @@ export interface ScoutToolConfig {
 	getLinksRecursive: boolean;
 	viewAllNotes: boolean;    // View all note names with frontmatter
 	exploreVault: boolean;    // Explore folders and tags
+	listAllTags: boolean;     // List all tags in vault
+	askUser: boolean;         // Ask user clarifying questions
 	keywordLimit: number;
 	semanticLimit: number;
 	listNotesLimit: number;
@@ -145,11 +149,40 @@ export interface ContextAgentToolCall {
 	arguments: Record<string, unknown>;
 }
 
+// Metadata about how each note was selected by Scout
+export interface NoteSelectionMetadata {
+	path: string;
+	selectionReason: 'current' | 'linked' | 'folder' | 'semantic' | 'keyword' | 'manual';
+	// Scout-specific metadata (when scout selected this note)
+	scoutMetadata?: {
+		semanticScore?: number;        // 0-1 from embedding search
+		keywordMatchType?: 'title' | 'heading' | 'content';
+		linkDepth?: number;            // 1, 2, or 3
+	};
+}
+
+// User clarification response for ask_user tool
+export interface UserClarificationResponse {
+	answer: string;          // User's typed response
+	selectedOption?: number; // 1-indexed if user chose an option
+}
+
 export interface ContextAgentResult {
 	selectedPaths: string[];
+	selectedNotes: NoteSelectionMetadata[];  // Rich metadata per note
 	reasoning: string;
+	confidence: 'exploring' | 'confident' | 'done';  // Moved from internal
+	explorationSummary: string;  // Human-readable exploration journey
 	toolCalls: ContextAgentToolCall[];  // For progress display
-	recommendedMode?: 'qa' | 'edit';    // Agent's recommended mode for Phase 2
+	tokensUsed?: number;
+	// For ask_user tool - allows pausing/resuming
+	status: 'complete' | 'waiting_for_user';
+	userQuestion?: {
+		question: string;
+		options?: string[];
+	};
+	// Internal state for resuming (serialized conversation)
+	_resumeState?: string;
 }
 
 // Progress event for live UI updates
@@ -230,6 +263,12 @@ export interface WebSource {
 	summary: string;
 }
 
+// Enhanced web source with metadata for pipeline context
+export interface EnhancedWebSource extends WebSource {
+	fetchedAt: string;               // ISO timestamp
+	selectionReason?: string;        // Why this source was chosen
+}
+
 export interface WebAgentResult {
 	searchPerformed: boolean;
 	webContext: string;
@@ -241,6 +280,9 @@ export interface WebAgentResult {
 		message: string;
 		detail: string;
 	};
+	// Pipeline metadata
+	searchQueries?: string[];        // All queries attempted
+	evaluationReasoning?: string;    // Why search was/wasn't needed
 }
 
 export interface WebAgentProgressEvent {
@@ -257,6 +299,33 @@ export interface PipelineConfig {
 	scoutEnabled: boolean;         // Run Scout Agent (default: true in agentic mode)
 	webEnabled: boolean;           // Run Web Agent (default: false, opt-in)
 	taskEnabled: boolean;          // Run Task Agent (default: true)
+}
+
+// ============================================
+// Pipeline Context Types (accumulated across phases)
+// ============================================
+
+export interface PipelineContext {
+	scout?: {
+		selectedNotes: NoteSelectionMetadata[];
+		reasoning: string;
+		confidence: 'exploring' | 'confident' | 'done';
+		explorationSummary: string;    // Human-readable exploration journey
+		tokensUsed: number;
+	};
+	web?: {
+		searchPerformed: boolean;
+		evaluationReasoning?: string;  // Why web search was/wasn't needed
+		searchQueries: string[];       // All queries attempted
+		sources: EnhancedWebSource[];
+		tokensUsed: number;
+	};
+	tokenAccounting: {
+		scoutTokens: number;
+		webTokens: number;
+		taskTokens: number;
+		totalTokens: number;
+	};
 }
 
 // ============================================
@@ -281,6 +350,7 @@ export interface TaskAgentInput {
 	context: string;            // Formatted notes with line numbers (includes task section)
 	chatHistory: ChatMessage[]; // Previous conversation
 	webSources?: WebSource[];   // Optional web context (for citation instructions)
+	pipelineContext?: PipelineContext;  // Context from prior agents
 }
 
 export interface TaskAgentResult {

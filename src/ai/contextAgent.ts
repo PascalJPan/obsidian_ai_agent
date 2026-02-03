@@ -15,7 +15,9 @@ import {
 	LinkInfo,
 	EmbeddingIndex,
 	EmbeddingModel,
-	ScoutToolConfig
+	ScoutToolConfig,
+	NoteSelectionMetadata,
+	UserClarificationResponse
 } from '../types';
 import { generateEmbedding, searchSemantic } from './semantic';
 
@@ -24,7 +26,21 @@ interface SelectionState {
 	selectedPaths: string[];
 	reasoning: string;
 	confidence: 'exploring' | 'confident' | 'done';
-	recommendedMode?: 'qa' | 'edit';  // Agent's recommended mode for Phase 2
+}
+
+// Tracked metadata for selected notes
+interface NoteMetadataTracker {
+	semanticScores: Map<string, number>;
+	keywordMatchTypes: Map<string, 'title' | 'heading' | 'content'>;
+	linkDepths: Map<string, number>;
+}
+
+// Exploration history for building summary
+interface ExplorationStep {
+	tool: string;
+	query?: string;
+	resultCount: number;
+	detail?: string;
 }
 
 // Individual tool definitions for OpenAI function calling
@@ -32,7 +48,7 @@ const TOOL_UPDATE_SELECTION = {
 	type: 'function' as const,
 	function: {
 		name: 'update_selection',
-		description: 'Update your current selection of relevant notes. CRITICAL: Call this after each exploration step to save your progress. Set confidence to "done" when you have enough context. When done, also set recommendedMode based on the task.',
+		description: 'Update your current selection of relevant notes. CRITICAL: Call this after each exploration step to save your progress. Set confidence to "done" when you have enough context.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -49,11 +65,6 @@ const TOOL_UPDATE_SELECTION = {
 					type: 'string',
 					enum: ['exploring', 'confident', 'done'],
 					description: '"exploring" = still looking, "confident" = good selection but may continue, "done" = finished exploring'
-				},
-				recommendedMode: {
-					type: 'string',
-					enum: ['qa', 'edit'],
-					description: 'When confidence is "done": "qa" if user is asking a question/seeking info, "edit" if user wants to modify/add/delete note content'
 				}
 			},
 			required: ['selectedPaths', 'reasoning', 'confidence']
@@ -268,6 +279,41 @@ const TOOL_EXPLORE_VAULT = {
 	}
 };
 
+const TOOL_LIST_ALL_TAGS = {
+	type: 'function' as const,
+	function: {
+		name: 'list_all_tags',
+		description: 'Get a list of all tags used in the vault with their note counts. Use this to discover what tags exist before searching by tag.',
+		parameters: {
+			type: 'object',
+			properties: {}
+		}
+	}
+};
+
+const TOOL_ASK_USER = {
+	type: 'function' as const,
+	function: {
+		name: 'ask_user',
+		description: 'Ask the user a clarifying question. Use when the task is ambiguous or you need direction on which notes/topics to focus on. Prefer multiple choice (2-5 options) but open-ended is fine if needed.',
+		parameters: {
+			type: 'object',
+			properties: {
+				question: {
+					type: 'string',
+					description: 'The question to ask the user'
+				},
+				options: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Optional: 2-5 answer choices. If provided, user can respond with number (1,2,3...) or type freely.'
+				}
+			},
+			required: ['question']
+		}
+	}
+};
+
 // Generic OpenAI tool definition type
 interface OpenAITool {
 	type: 'function';
@@ -297,18 +343,37 @@ export function getAvailableTools(config: ScoutToolConfig): OpenAITool[] {
 	if (config.getLinksRecursive) tools.push(TOOL_GET_LINKS_RECURSIVE);
 	if (config.viewAllNotes) tools.push(TOOL_VIEW_ALL_NOTES);
 	if (config.exploreVault) tools.push(TOOL_EXPLORE_VAULT);
+	if (config.listAllTags) tools.push(TOOL_LIST_ALL_TAGS);
+	if (config.askUser) tools.push(TOOL_ASK_USER);
 
 	return tools;
 }
 
-function buildContextAgentSystemPrompt(maxNotes: number): string {
-	return `You are a context curator for an AI assistant. Your goal: find notes that will help accomplish the user's task.
+function buildContextAgentSystemPrompt(maxNotes: number, tokenLimit?: number, showTokenBudget?: boolean, askUserEnabled?: boolean): string {
+	let prompt = `You are a context curator for an AI assistant. Your goal: find notes that will help accomplish the user's task.
+
+## TASK COMPLEXITY RECOGNITION
+
+SIMPLE TASKS (finish in 1-2 iterations):
+- "All linked notes" → get_links() + update_selection(done)
+- "Notes in this folder" → list_notes(folder) + done
+- "Notes with tag X" → explore_vault(find_by_tag) + done
+- "Current note only" → just include current note + done
+- Any task where your first tool call gives you everything needed → finish immediately
+
+COMPLEX TASKS (explore thoroughly):
+- "Find relevant context for..." → semantic search + follow links
+- "Notes about topic X" → keyword + semantic + multi-hop exploration
+- Open-ended questions → broad exploration needed
+
+If your first tool call gives you everything needed, finish immediately.
+Don't over-explore simple tasks.
 
 ## WORKFLOW
-1. Analyze the task - what kind of information would help?
+1. Analyze the task - is it simple or complex?
 2. Explore using tools (you can call up to 2 tools per turn for efficiency)
 3. After EACH exploration step, call update_selection() with your current best picks
-4. When confident you have enough context, set confidence: "done" AND set recommendedMode
+4. When confident you have enough context, set confidence: "done"
 
 ## AVAILABLE SEARCH STRATEGIES
 - search_keyword("term") - Fast exact search, prioritizes title > heading > content matches
@@ -327,25 +392,43 @@ function buildContextAgentSystemPrompt(maxNotes: number): string {
 2. get_links_recursive("Projects.md", depth=2) → discovers "Roadmap.md", "Tasks.md"
 3. These linked notes may be more relevant than direct search results!
 
-## MODE SELECTION (when setting confidence: "done")
-Analyze the user's task to determine the appropriate mode:
-- Use "qa" mode if the user is:
-  - Asking a question ("What is...", "How does...", "Why...")
-  - Seeking information or explanations
-  - Requesting a summary or analysis
-- Use "edit" mode if the user wants to:
-  - Modify, update, or change existing content
-  - Add new content to notes
-  - Delete or remove content
-  - Create new notes
-  - Reorganize or refactor notes
+## CRITICAL: FETCH BEFORE FINALIZING
+Before setting confidence: "done", fetch at least the top 2-3 notes you're selecting.
+Don't select notes blind - verify their content is actually relevant to the task.
+A quick fetch_note() check can prevent including irrelevant notes.`;
+
+	// Add ask_user guidance if enabled
+	if (askUserEnabled) {
+		prompt += `
+
+## ASKING FOR CLARIFICATION
+If the task is ambiguous or you're unsure which direction to take, use ask_user() to clarify.
+Good times to ask:
+- Multiple possible interpretations of the task
+- User refers to something that could match multiple notes/topics
+- Need to know scope or preference
+Keep questions concise with clear options when possible.`;
+	}
+
+	// Add token budget information if enabled
+	if (showTokenBudget && tokenLimit) {
+		prompt += `
+
+## TOKEN BUDGET
+Your selections have a ${tokenLimit.toLocaleString()} token budget. Prioritize concise, highly relevant notes.
+When you call update_selection(), you'll see an estimate of total tokens for your selection.`;
+	}
+
+	prompt += `
 
 ## CRITICAL RULES
 - Call update_selection() after EACH exploration step with your reasoning
 - This ensures we always have your best picks even if exploration is interrupted
 - Select up to ${maxNotes} notes maximum. Quality over quantity.
 - Include the current note path if it's relevant
-- When done, set confidence: "done" AND recommendedMode to finish exploration`;
+- When done, set confidence: "done" to finish exploration`;
+
+	return prompt;
 }
 
 interface ToolHandlerContext {
@@ -359,6 +442,8 @@ interface ToolHandlerContext {
 	currentFilePath: string;    // Path of the current file for task-relevant search
 	currentFileContent: string; // Content of current file for task-relevant search
 	toolConfig: ScoutToolConfig; // Tool configuration with limits
+	metadataTracker: NoteMetadataTracker; // Track metadata for selected notes
+	explorationSteps: ExplorationStep[];  // Track exploration history for summary
 }
 
 /**
@@ -392,6 +477,11 @@ async function handleToolCall(
 			return await handleViewAllNotes(args, context, onProgress);
 		case 'explore_vault':
 			return await handleExploreVault(args, context, onProgress);
+		case 'list_all_tags':
+			return await handleListAllTags(context, onProgress);
+		case 'ask_user':
+			// ask_user is handled specially in the main loop (triggers pause)
+			return JSON.stringify({ status: 'ask_user_triggered' });
 		default:
 			return JSON.stringify({ error: `Unknown tool: ${name}` });
 	}
@@ -481,6 +571,18 @@ async function handleSearchSemantic(
 			score: Math.round(m.score * 100) / 100,
 			heading: m.heading
 		}));
+
+		// Track semantic scores in metadata
+		for (const match of matches) {
+			context.metadataTracker.semanticScores.set(match.notePath, match.score);
+		}
+
+		// Track exploration step
+		context.explorationSteps.push({
+			tool: 'search_semantic',
+			query: query,
+			resultCount: results.length
+		});
 
 		const previewCount = Math.min(5, results.length);
 		onProgress({
@@ -693,6 +795,19 @@ async function handleSearchKeyword(
 		preview: r.preview
 	}));
 
+	// Track keyword match types in metadata
+	for (const result of limitedResults) {
+		context.metadataTracker.keywordMatchTypes.set(result.path, result.matchType);
+	}
+
+	// Track exploration step
+	context.explorationSteps.push({
+		tool: 'search_keyword',
+		query: keyword,
+		resultCount: limitedResults.length,
+		detail: limitedResults.slice(0, 3).map(r => `${r.matchType}: ${r.path.split('/').pop()}`).join(', ')
+	});
+
 	const keywordPreviewCount = Math.min(5, limitedResults.length);
 	onProgress({
 		type: 'tool_call',
@@ -842,6 +957,18 @@ async function handleGetLinksRecursive(
 
 		currentLevel = nextLevel;
 	}
+
+	// Track link depths in metadata
+	for (const result of results) {
+		context.metadataTracker.linkDepths.set(result.path, result.depth);
+	}
+
+	// Track exploration step
+	context.explorationSteps.push({
+		tool: 'get_links_recursive',
+		query: `${path} (depth ${depth}, ${direction})`,
+		resultCount: results.length
+	});
 
 	onProgress({
 		type: 'tool_call',
@@ -1106,6 +1233,70 @@ async function handleFindByTag(
 	return JSON.stringify({ tag: '#' + tag, matches });
 }
 
+/**
+ * List all tags in the vault with their note counts
+ */
+async function handleListAllTags(
+	context: ToolHandlerContext,
+	onProgress: (event: AgentProgressEvent) => void
+): Promise<string> {
+	onProgress({
+		type: 'tool_call',
+		message: 'Listing all vault tags',
+		detail: 'Scanning notes for tags'
+	});
+
+	const tagCounts = new Map<string, number>();
+	const allFiles = context.vault.getMarkdownFiles();
+
+	for (const file of allFiles) {
+		if (isFileExcluded(file.path, context.excludedFolders)) continue;
+
+		const cache = context.metadataCache.getFileCache(file);
+
+		// Count inline tags
+		if (cache?.tags) {
+			for (const tagRef of cache.tags) {
+				// tagRef.tag includes the # prefix
+				const tag = tagRef.tag.substring(1);
+				const rootTag = tag.split('/')[0]; // Get root of nested tags
+				tagCounts.set(rootTag, (tagCounts.get(rootTag) || 0) + 1);
+			}
+		}
+
+		// Count frontmatter tags
+		if (cache?.frontmatter?.tags) {
+			const fmTags = cache.frontmatter.tags;
+			const tagArray = Array.isArray(fmTags) ? fmTags : [fmTags];
+			for (const fmTag of tagArray) {
+				const normalizedTag = String(fmTag).startsWith('#') ? String(fmTag).substring(1) : String(fmTag);
+				const rootTag = normalizedTag.split('/')[0];
+				tagCounts.set(rootTag, (tagCounts.get(rootTag) || 0) + 1);
+			}
+		}
+	}
+
+	// Convert to sorted array
+	const tags = [...tagCounts.entries()]
+		.map(([tag, count]) => ({ tag: '#' + tag, count }))
+		.sort((a, b) => b.count - a.count);
+
+	// Track exploration step
+	context.explorationSteps.push({
+		tool: 'list_all_tags',
+		resultCount: tags.length,
+		detail: tags.slice(0, 5).map(t => `${t.tag}(${t.count})`).join(', ')
+	});
+
+	onProgress({
+		type: 'tool_call',
+		message: `Found ${tags.length} tags`,
+		detail: tags.slice(0, 5).map(t => `${t.tag}(${t.count})`).join(', ') + (tags.length > 5 ? ', ...' : '')
+	});
+
+	return JSON.stringify({ tags, total: tags.length });
+}
+
 function isFileExcluded(filePath: string, excludedFolders: string[]): boolean {
 	for (const folder of excludedFolders) {
 		const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
@@ -1137,6 +1328,15 @@ export async function runContextAgent(
 	toolConfig: ScoutToolConfig,
 	onProgress: (event: AgentProgressEvent) => void
 ): Promise<ContextAgentResult> {
+	// Initialize metadata tracking
+	const metadataTracker: NoteMetadataTracker = {
+		semanticScores: new Map(),
+		keywordMatchTypes: new Map(),
+		linkDepths: new Map()
+	};
+
+	const explorationSteps: ExplorationStep[] = [];
+
 	const context: ToolHandlerContext = {
 		vault,
 		metadataCache,
@@ -1147,7 +1347,9 @@ export async function runContextAgent(
 		fetchedNotes: new Set([currentFile.path]),
 		currentFilePath: currentFile.path,
 		currentFileContent,
-		toolConfig
+		toolConfig,
+		metadataTracker,
+		explorationSteps
 	};
 
 	// Build initial context with current note info
@@ -1161,9 +1363,33 @@ ${currentFileContent.substring(0, 4000)}${currentFileContent.length > 4000 ? '\n
 Find the most relevant notes for this task. Remember to call update_selection() after each exploration step!`;
 
 	const messages: Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }> = [
-		{ role: 'system', content: buildContextAgentSystemPrompt(config.maxNotes) },
+		{ role: 'system', content: buildContextAgentSystemPrompt(config.maxNotes, config.tokenLimit, config.showTokenBudget, toolConfig.askUser) },
 		{ role: 'user', content: initialContext }
 	];
+
+	// Helper to estimate tokens for a note path
+	const estimateNoteTokens = async (path: string): Promise<number> => {
+		try {
+			const file = vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) {
+				const content = await vault.cachedRead(file);
+				// Rough estimate: ~4 chars per token
+				return Math.ceil(content.length / 4);
+			}
+		} catch {
+			// Ignore errors
+		}
+		return 0;
+	};
+
+	// Estimate total tokens for a selection
+	const estimateSelectionTokens = async (paths: string[]): Promise<number> => {
+		let total = 0;
+		for (const path of paths) {
+			total += await estimateNoteTokens(path);
+		}
+		return total;
+	};
 
 	const allToolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 	let iteration = 0;
@@ -1231,9 +1457,8 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 					const selectedPaths = (args.selectedPaths as string[]) || [];
 					const reasoning = (args.reasoning as string) || 'No reasoning provided';
 					const confidence = (args.confidence as 'exploring' | 'confident' | 'done') || 'exploring';
-					const recommendedMode = args.recommendedMode as 'qa' | 'edit' | undefined;
 
-					lastSelection = { selectedPaths, reasoning, confidence, recommendedMode };
+					lastSelection = { selectedPaths, reasoning, confidence };
 
 					onProgress({
 						type: 'tool_call',
@@ -1246,16 +1471,65 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 						finished = true;
 					}
 
+					// Build tool response with optional token estimate
+					const toolResponse: Record<string, unknown> = {
+						status: 'selection_updated',
+						noteCount: selectedPaths.length,
+						confidence
+					};
+
+					// Add token estimate if token budget is enabled
+					if (config.showTokenBudget && config.tokenLimit) {
+						const estimatedTokens = await estimateSelectionTokens(selectedPaths);
+						toolResponse.estimatedTokens = estimatedTokens;
+						toolResponse.tokenBudget = config.tokenLimit;
+						toolResponse.budgetStatus = estimatedTokens > config.tokenLimit
+							? `OVER BUDGET by ${(estimatedTokens - config.tokenLimit).toLocaleString()} tokens - consider removing notes`
+							: `Within budget (${Math.round(estimatedTokens / config.tokenLimit * 100)}% used)`;
+					}
+
 					messages.push({
 						role: 'tool',
 						tool_call_id: toolCall.id,
-						content: JSON.stringify({
-							status: 'selection_updated',
-							noteCount: selectedPaths.length,
-							confidence,
-							recommendedMode
-						})
+						content: JSON.stringify(toolResponse)
 					});
+				} else if (name === 'ask_user') {
+					// ask_user triggers a pause - return early with waiting status
+					const question = (args.question as string) || 'Could you clarify?';
+					const options = args.options as string[] | undefined;
+
+					onProgress({
+						type: 'tool_call',
+						message: 'Asking user for clarification',
+						detail: question.substring(0, 60)
+					});
+
+					// Build selected notes metadata from what we've gathered so far
+					const selectedNotes = buildSelectedNotesMetadata(
+						lastSelection?.selectedPaths || [currentFile.path],
+						currentFile.path,
+						metadataTracker
+					);
+
+					// Build exploration summary so far
+					const explorationSummary = buildExplorationSummary(explorationSteps);
+
+					return {
+						selectedPaths: lastSelection?.selectedPaths || [currentFile.path],
+						selectedNotes,
+						reasoning: lastSelection?.reasoning || 'Exploration paused for user clarification.',
+						confidence: lastSelection?.confidence || 'exploring',
+						explorationSummary,
+						toolCalls: allToolCalls,
+						status: 'waiting_for_user',
+						userQuestion: { question, options },
+						_resumeState: JSON.stringify({
+							messages,
+							lastSelection,
+							iteration,
+							pendingToolCallId: toolCall.id
+						})
+					};
 				} else {
 					// Handle other tool calls
 					const toolResult = await handleToolCall(name, args, context, onProgress);
@@ -1265,6 +1539,19 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 						content: toolResult
 					});
 				}
+			}
+
+			// Inject iteration status message after processing tool calls (if not finished)
+			if (!finished && iteration < config.maxIterations) {
+				const remainingRounds = config.maxIterations - iteration;
+				const statusMessage = `--- Exploration Status ---
+Round ${iteration} of ${config.maxIterations} complete. ${remainingRounds} round${remainingRounds !== 1 ? 's' : ''} remaining.
+Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} notes` : 'none'}.
+---`;
+				messages.push({
+					role: 'user',
+					content: statusMessage
+				});
 			}
 		} else {
 			// No tool calls - model is done or stuck
@@ -1278,6 +1565,9 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 	// Build final result from lastSelection
 	let result: ContextAgentResult;
 
+	// Build exploration summary
+	const explorationSummary = buildExplorationSummary(explorationSteps);
+
 	if (lastSelection && lastSelection.selectedPaths.length > 0) {
 		// Ensure current file is included if not already
 		let finalPaths = [...lastSelection.selectedPaths];
@@ -1287,11 +1577,17 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 		// Limit to maxNotes
 		finalPaths = finalPaths.slice(0, config.maxNotes);
 
+		// Build selected notes metadata
+		const selectedNotes = buildSelectedNotesMetadata(finalPaths, currentFile.path, metadataTracker);
+
 		result = {
 			selectedPaths: finalPaths,
+			selectedNotes,
 			reasoning: lastSelection.reasoning,
+			confidence: lastSelection.confidence,
+			explorationSummary,
 			toolCalls: allToolCalls,
-			recommendedMode: lastSelection.recommendedMode
+			status: 'complete'
 		};
 
 		onProgress({
@@ -1300,19 +1596,382 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 			detail: lastSelection.reasoning.substring(0, 100)
 		});
 	} else {
-		// No selection was ever made - fallback to current note only
+		// No selection was ever made - try semantic fallback if embedding index exists
+		let fallbackPaths = [currentFile.path];
+		let fallbackReasoning = 'Warning: Agent did not call update_selection().';
+
+		if (embeddingIndex) {
+			try {
+				onProgress({
+					type: 'tool_call',
+					message: 'Running semantic fallback search',
+					detail: 'Agent did not make a selection'
+				});
+
+				// Generate embedding for the task
+				const taskEmbedding = await generateEmbedding(
+					task,
+					apiKey,
+					embeddingModel
+				);
+
+				// Search for semantically similar notes
+				const excludePaths = new Set<string>([currentFile.path]);
+				const semanticMatches = searchSemantic(
+					taskEmbedding,
+					embeddingIndex,
+					excludePaths,
+					5,  // Up to 5 semantic matches
+					0.4 // Threshold of 0.4
+				);
+
+				if (semanticMatches.length > 0) {
+					// Add semantic matches to fallback paths
+					for (const match of semanticMatches) {
+						fallbackPaths.push(match.notePath);
+					}
+					fallbackReasoning = `Agent did not call update_selection(). Fallback: semantic search found ${semanticMatches.length} relevant notes.`;
+
+					onProgress({
+						type: 'tool_call',
+						message: `Semantic fallback found ${semanticMatches.length} notes`,
+						detail: semanticMatches.map(m => m.notePath.split('/').pop()).join(', ')
+					});
+				}
+			} catch (error) {
+				// Semantic fallback failed - continue with just current note
+				console.warn('Semantic fallback failed:', error);
+				fallbackReasoning += ' Semantic fallback also failed.';
+			}
+		}
+
+		// Build selected notes metadata for fallback
+		const selectedNotes = buildSelectedNotesMetadata(fallbackPaths, currentFile.path, metadataTracker);
+
 		result = {
-			selectedPaths: [currentFile.path],
-			reasoning: 'Warning: Agent did not call update_selection(). Only current note included.',
-			toolCalls: allToolCalls
+			selectedPaths: fallbackPaths,
+			selectedNotes,
+			reasoning: fallbackReasoning + ' Only current note included.',
+			confidence: 'done',
+			explorationSummary: explorationSummary || 'No exploration performed.',
+			toolCalls: allToolCalls,
+			status: 'complete'
 		};
 
 		onProgress({
 			type: 'complete',
-			message: 'Warning: No selection made',
-			detail: 'Only current note included - agent did not call update_selection()'
+			message: fallbackPaths.length > 1
+				? `Fallback: ${fallbackPaths.length} notes (semantic)`
+				: 'Warning: No selection made',
+			detail: fallbackPaths.length > 1
+				? 'Used semantic search as fallback'
+				: 'Only current note included - agent did not call update_selection()'
 		});
 	}
 
 	return result;
+}
+
+/**
+ * Build selected notes metadata from tracker
+ */
+function buildSelectedNotesMetadata(
+	paths: string[],
+	currentFilePath: string,
+	tracker: NoteMetadataTracker
+): NoteSelectionMetadata[] {
+	return paths.map(path => {
+		// Determine selection reason
+		let selectionReason: NoteSelectionMetadata['selectionReason'] = 'manual';
+
+		if (path === currentFilePath) {
+			selectionReason = 'current';
+		} else if (tracker.semanticScores.has(path)) {
+			selectionReason = 'semantic';
+		} else if (tracker.keywordMatchTypes.has(path)) {
+			selectionReason = 'keyword';
+		} else if (tracker.linkDepths.has(path)) {
+			selectionReason = 'linked';
+		}
+
+		const metadata: NoteSelectionMetadata = {
+			path,
+			selectionReason
+		};
+
+		// Add scout-specific metadata
+		const semanticScore = tracker.semanticScores.get(path);
+		const keywordMatchType = tracker.keywordMatchTypes.get(path);
+		const linkDepth = tracker.linkDepths.get(path);
+
+		if (semanticScore !== undefined || keywordMatchType !== undefined || linkDepth !== undefined) {
+			metadata.scoutMetadata = {};
+			if (semanticScore !== undefined) metadata.scoutMetadata.semanticScore = semanticScore;
+			if (keywordMatchType !== undefined) metadata.scoutMetadata.keywordMatchType = keywordMatchType;
+			if (linkDepth !== undefined) metadata.scoutMetadata.linkDepth = linkDepth;
+		}
+
+		return metadata;
+	});
+}
+
+/**
+ * Build human-readable exploration summary
+ */
+function buildExplorationSummary(steps: ExplorationStep[]): string {
+	if (steps.length === 0) return 'No exploration steps performed.';
+
+	const summaryParts: string[] = [];
+
+	for (const step of steps) {
+		switch (step.tool) {
+			case 'search_keyword':
+				summaryParts.push(`Searched "${step.query}" → ${step.resultCount} keyword matches`);
+				break;
+			case 'search_semantic':
+				summaryParts.push(`Semantic search "${step.query?.substring(0, 30)}..." → ${step.resultCount} matches`);
+				break;
+			case 'get_links_recursive':
+				summaryParts.push(`Explored links ${step.query} → ${step.resultCount} notes`);
+				break;
+			case 'list_all_tags':
+				summaryParts.push(`Listed ${step.resultCount} tags`);
+				break;
+			default:
+				if (step.resultCount > 0) {
+					summaryParts.push(`${step.tool}: ${step.resultCount} results`);
+				}
+		}
+	}
+
+	return summaryParts.join('. ') + '.';
+}
+
+/**
+ * Continue context agent after user responds to ask_user
+ */
+export async function continueContextAgent(
+	resumeState: string,
+	userResponse: UserClarificationResponse,
+	task: string,
+	currentFile: TFile,
+	currentFileContent: string,
+	config: AgenticModeConfig,
+	vault: Vault,
+	metadataCache: MetadataCache,
+	excludedFolders: string[],
+	embeddingIndex: EmbeddingIndex | null,
+	apiKey: string,
+	embeddingModel: EmbeddingModel,
+	toolConfig: ScoutToolConfig,
+	onProgress: (event: AgentProgressEvent) => void
+): Promise<ContextAgentResult> {
+	// Parse resume state
+	const state = JSON.parse(resumeState) as {
+		messages: Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }>;
+		lastSelection: SelectionState | null;
+		iteration: number;
+		pendingToolCallId: string;
+	};
+
+	// Re-initialize tracking (lost during pause)
+	const metadataTracker: NoteMetadataTracker = {
+		semanticScores: new Map(),
+		keywordMatchTypes: new Map(),
+		linkDepths: new Map()
+	};
+	const explorationSteps: ExplorationStep[] = [];
+
+	const context: ToolHandlerContext = {
+		vault,
+		metadataCache,
+		excludedFolders,
+		embeddingIndex,
+		apiKey,
+		embeddingModel,
+		fetchedNotes: new Set([currentFile.path]),
+		currentFilePath: currentFile.path,
+		currentFileContent,
+		toolConfig,
+		metadataTracker,
+		explorationSteps
+	};
+
+	// Format user response
+	let responseText = userResponse.answer;
+	if (userResponse.selectedOption !== undefined) {
+		responseText = `User selected option ${userResponse.selectedOption}: ${userResponse.answer}`;
+	}
+
+	// Add tool result for the ask_user call
+	state.messages.push({
+		role: 'tool',
+		tool_call_id: state.pendingToolCallId,
+		content: JSON.stringify({
+			status: 'user_responded',
+			response: responseText
+		})
+	});
+
+	const allToolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+	let iteration = state.iteration;
+	let finished = false;
+	let lastSelection = state.lastSelection;
+
+	// Continue the agent loop
+	while (iteration < config.maxIterations && !finished) {
+		iteration++;
+		onProgress({
+			type: 'iteration',
+			message: `Exploration round ${iteration}/${config.maxIterations}`,
+			detail: lastSelection
+				? `${lastSelection.selectedPaths.length} notes selected (${lastSelection.confidence})`
+				: 'No selection yet'
+		});
+
+		const availableTools = getAvailableTools(toolConfig);
+		const response = await requestUrl({
+			url: 'https://api.openai.com/v1/chat/completions',
+			method: 'POST',
+			headers: {
+				'Authorization': `Bearer ${apiKey}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				model: config.scoutModel === 'same' ? 'gpt-4o-mini' : config.scoutModel,
+				messages: state.messages,
+				tools: availableTools,
+				tool_choice: 'auto',
+				parallel_tool_calls: true
+			}),
+		});
+
+		const data = response.json;
+		const assistantMessage = data.choices?.[0]?.message;
+
+		if (!assistantMessage) {
+			throw new Error('No response from context agent');
+		}
+
+		state.messages.push(assistantMessage);
+
+		if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+			for (const toolCall of assistantMessage.tool_calls) {
+				const functionCall = toolCall.function;
+				const name = functionCall.name;
+				let args: Record<string, unknown> = {};
+
+				try {
+					args = JSON.parse(functionCall.arguments || '{}');
+				} catch {
+					args = {};
+				}
+
+				allToolCalls.push({ name, arguments: args });
+
+				if (name === 'update_selection') {
+					const selectedPaths = (args.selectedPaths as string[]) || [];
+					const reasoning = (args.reasoning as string) || 'No reasoning provided';
+					const confidence = (args.confidence as 'exploring' | 'confident' | 'done') || 'exploring';
+
+					lastSelection = { selectedPaths, reasoning, confidence };
+
+					onProgress({
+						type: 'tool_call',
+						message: `Selection updated (${confidence}): ${selectedPaths.length} notes`,
+						detail: reasoning.substring(0, 80)
+					});
+
+					if (confidence === 'done') {
+						finished = true;
+					}
+
+					const toolResponse: Record<string, unknown> = {
+						status: 'selection_updated',
+						noteCount: selectedPaths.length,
+						confidence
+					};
+
+					state.messages.push({
+						role: 'tool',
+						tool_call_id: toolCall.id,
+						content: JSON.stringify(toolResponse)
+					});
+				} else if (name === 'ask_user') {
+					// Another ask_user - return waiting again
+					const question = (args.question as string) || 'Could you clarify?';
+					const options = args.options as string[] | undefined;
+
+					const selectedNotes = buildSelectedNotesMetadata(
+						lastSelection?.selectedPaths || [currentFile.path],
+						currentFile.path,
+						metadataTracker
+					);
+
+					return {
+						selectedPaths: lastSelection?.selectedPaths || [currentFile.path],
+						selectedNotes,
+						reasoning: lastSelection?.reasoning || 'Exploration paused for user clarification.',
+						confidence: lastSelection?.confidence || 'exploring',
+						explorationSummary: buildExplorationSummary(explorationSteps),
+						toolCalls: allToolCalls,
+						status: 'waiting_for_user',
+						userQuestion: { question, options },
+						_resumeState: JSON.stringify({
+							messages: state.messages,
+							lastSelection,
+							iteration,
+							pendingToolCallId: toolCall.id
+						})
+					};
+				} else {
+					const toolResult = await handleToolCall(name, args, context, onProgress);
+					state.messages.push({
+						role: 'tool',
+						tool_call_id: toolCall.id,
+						content: toolResult
+					});
+				}
+			}
+		} else {
+			if (lastSelection) {
+				finished = true;
+			}
+		}
+	}
+
+	// Build final result
+	const explorationSummary = buildExplorationSummary(explorationSteps);
+
+	if (lastSelection && lastSelection.selectedPaths.length > 0) {
+		let finalPaths = [...lastSelection.selectedPaths];
+		if (!finalPaths.includes(currentFile.path)) {
+			finalPaths.unshift(currentFile.path);
+		}
+		finalPaths = finalPaths.slice(0, config.maxNotes);
+
+		const selectedNotes = buildSelectedNotesMetadata(finalPaths, currentFile.path, metadataTracker);
+
+		return {
+			selectedPaths: finalPaths,
+			selectedNotes,
+			reasoning: lastSelection.reasoning,
+			confidence: lastSelection.confidence,
+			explorationSummary,
+			toolCalls: allToolCalls,
+			status: 'complete'
+		};
+	}
+
+	// Fallback
+	const selectedNotes = buildSelectedNotesMetadata([currentFile.path], currentFile.path, metadataTracker);
+	return {
+		selectedPaths: [currentFile.path],
+		selectedNotes,
+		reasoning: 'No selection made after user clarification.',
+		confidence: 'done',
+		explorationSummary,
+		toolCalls: allToolCalls,
+		status: 'complete'
+	};
 }

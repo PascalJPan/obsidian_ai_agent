@@ -31,13 +31,11 @@
 - [ ] Consider saved context presets/profiles
 
 ### Future Enhancements
-- [ ] **Orchestrator Agent** - Meta-agent that routes tasks to appropriate pipeline
+- [ ] **Full Orchestrator Agent** - Meta-agent that routes tasks (partial: PipelineContext done)
   - Owns chat history, sends only relevant context to each agent
   - Classifies task type and selects which agents to run
   - Enables multi-round orchestration (Web → Scout → Edit)
-  - Strict modularity: clear input/output interfaces per agent
-  - Task Agent handles both answers and edits (no split needed)
-  - Smart context management to reduce token usage
+- [ ] **Saved context presets** - Save/load context selection profiles
 
 ### UI/UX Improvements
 - [x] **Move edit options to settings** - Moved edit rules toggle from chat tab to Obsidian settings panel
@@ -60,6 +58,21 @@
   - Toggle states persist across sessions
   - Default: Scout OFF, Web OFF, Task ON
   - Copy button in Scout results to copy all selected note contents
+- [x] **Pipeline Context** - Task Agent now understands WHY notes were selected:
+  - `PipelineContext` object accumulates metadata across phases
+  - Scout metadata: per-note selection reason, semantic scores, keyword match types, link depths
+  - Web metadata: search queries attempted, evaluation reasoning
+  - Task Agent system prompt includes "Prior Agent Context" section
+- [x] **Scout Agent Enhancements**:
+  - New `list_all_tags` tool - Discover all tags in vault with counts
+  - New `ask_user` tool - Ask clarifying questions with pause/resume support
+  - Removed `recommendedMode` - Task Agent determines mode from task
+  - Added exploration summary tracking
+  - Improved prompts with "fetch before select" guidance
+- [x] **Unified Context Builder** - New `src/ai/contextBuilder.ts`:
+  - `buildUnifiedContext()` consolidates context building
+  - Per-note metadata annotations (semantic %, keyword match type)
+  - Token limit enforcement with priority-based removal
 
 ## Architecture Overview
 
@@ -225,9 +238,10 @@ npm run build  # Production build
 ```
 main.ts              - Entry point, plugin lifecycle, UI classes
 src/
-  types.ts           - Shared type definitions
+  types.ts           - Shared type definitions (PipelineContext, NoteSelectionMetadata, etc.)
   ai/
     context.ts       - Context utilities (addLineNumbers)
+    contextBuilder.ts - Unified context builder with metadata annotations
     contextAgent.ts  - Agentic mode Phase 1: vault exploration agent (Scout Agent)
     webAgent.ts      - Agentic mode Phase 2: web research agent (Web Agent)
     taskAgent.ts     - Agentic mode Phase 3: answer/edit execution (Task Agent)
@@ -251,20 +265,23 @@ An AI agent that explores the vault to find relevant notes for the user's task.
 **Tools available to the agent:**
 - `update_selection` - Maintains running selection with reasoning + confidence level
 - `list_notes` - List notes with previews (filterable by folder)
-- `search_keyword` - Fast keyword search with priority: title > heading > content
-- `search_semantic` - Embedding-based semantic similarity search
+- `search_keyword` - Fast keyword search with priority: title > heading > content (tracks match types)
+- `search_semantic` - Embedding-based semantic similarity search (tracks scores)
 - `search_task_relevant` - Task-aware semantic search (combines task + current note context)
 - `fetch_note` - Get full content of a specific note
 - `get_links` - Get direct links (in/out/both) from a note
-- `get_links_recursive` - BFS traversal for multi-hop link exploration (depth 1-3)
+- `get_links_recursive` - BFS traversal for multi-hop link exploration (depth 1-3, tracks depths)
 - `view_all_notes` - List ALL note names with aliases/descriptions from YAML frontmatter
 - `explore_vault` - Explore vault structure: list folder contents or find notes by tag
+- `list_all_tags` - List all tags in vault with note counts
+- `ask_user` - Ask clarifying questions (pauses execution, resumes after user response)
 
 **Running Selection Pattern:**
 - Agent calls `update_selection()` after each exploration step
 - Selection includes: selectedPaths, reasoning, confidence ('exploring'|'confident'|'done')
 - If agent sets confidence: 'done', exploration ends early
 - On timeout: uses the last selection (never falls back to arbitrary scoring)
+- Metadata tracked: semantic scores, keyword match types, link depths per note
 
 **Settings:**
 - `agenticMaxIterations` (2-5, default 3): Max exploration rounds
@@ -311,13 +328,38 @@ export async function runTaskAgent(
 ): Promise<TaskAgentResult>
 ```
 
-**Input:** Task string, context (formatted notes), chat history, optional web sources
+**Input:** Task string, context (formatted notes), chat history, optional web sources, pipeline context
 **Output:** Success flag, edits array (if any), summary text, token usage
 
 **Behavior:**
 - Builds system prompt with capabilities and scope rules
+- Includes "Prior Agent Context" section from PipelineContext:
+  - Scout: confidence, reasoning, high-relevance notes with scores
+  - Web: search queries, evaluation reasoning
 - Includes chat history for multi-turn conversations
 - Calls OpenAI API with JSON response format
 - Returns structured result for validation/insertion by main.ts
 
 The Task Agent decides whether to answer a question (empty edits) or propose changes (edits array) based on the user's request.
+
+### Pipeline Context (`PipelineContext`)
+Accumulates metadata across phases for Task Agent awareness:
+```typescript
+interface PipelineContext {
+  scout?: {
+    selectedNotes: NoteSelectionMetadata[];  // Per-note metadata
+    reasoning: string;
+    confidence: 'exploring' | 'confident' | 'done';
+    explorationSummary: string;
+    tokensUsed: number;
+  };
+  web?: {
+    searchPerformed: boolean;
+    evaluationReasoning?: string;
+    searchQueries: string[];
+    sources: EnhancedWebSource[];
+    tokensUsed: number;
+  };
+  tokenAccounting: { scoutTokens, webTokens, taskTokens, totalTokens };
+}
+```
