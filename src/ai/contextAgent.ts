@@ -20,6 +20,7 @@ import {
 	UserClarificationResponse
 } from '../types';
 import { generateEmbedding, searchSemantic } from './semantic';
+import { isFileExcluded } from '../utils/fileUtils';
 
 // Agent's running selection (updated throughout exploration)
 interface SelectionState {
@@ -392,10 +393,11 @@ Don't over-explore simple tasks.
 2. get_links_recursive("Projects.md", depth=2) → discovers "Roadmap.md", "Tasks.md"
 3. These linked notes may be more relevant than direct search results!
 
-## CRITICAL: FETCH BEFORE FINALIZING
-Before setting confidence: "done", fetch at least the top 2-3 notes you're selecting.
-Don't select notes blind - verify their content is actually relevant to the task.
-A quick fetch_note() check can prevent including irrelevant notes.`;
+## WHEN TO FETCH vs JUST SELECT
+- For CLEAR-CUT tasks ("all notes with tag X", "notes in folder Y", "linked notes"), just select and finalize - no need to fetch
+- For UNCERTAIN selections (semantic matches, keyword results), fetch_note() a few top picks to verify relevance
+- Use your judgment: if titles/paths clearly match the task, fetching is optional
+- Fetching is most useful when you're unsure if a note's content actually relates to the task`;
 
 	// Add ask_user guidance if enabled
 	if (askUserEnabled) {
@@ -1295,20 +1297,6 @@ async function handleListAllTags(
 	});
 
 	return JSON.stringify({ tags, total: tags.length });
-}
-
-function isFileExcluded(filePath: string, excludedFolders: string[]): boolean {
-	for (const folder of excludedFolders) {
-		const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
-		if (filePath.startsWith(normalizedFolder)) {
-			return true;
-		}
-		const parentPath = filePath.substring(0, filePath.lastIndexOf('/'));
-		if (parentPath === folder) {
-			return true;
-		}
-	}
-	return false;
 }
 
 /**

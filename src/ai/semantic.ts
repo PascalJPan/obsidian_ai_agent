@@ -4,6 +4,7 @@
 
 import { requestUrl, Vault, TFolder } from 'obsidian';
 import { EmbeddingChunk, EmbeddingIndex, EmbeddingModel } from '../types';
+import { isFileExcluded } from '../utils/fileUtils';
 
 // Chunk interface for internal processing
 interface Chunk {
@@ -145,23 +146,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
 	return dotProduct / (normA * normB);
 }
 
-/**
- * Check if a file is in an excluded folder
- */
-function isFileExcludedByPath(filePath: string, excludedFolders: string[]): boolean {
-	for (const folder of excludedFolders) {
-		const normalizedFolder = folder.endsWith('/') ? folder : folder + '/';
-		if (filePath.startsWith(normalizedFolder)) {
-			return true;
-		}
-		// Check if parent folder matches
-		const parentPath = filePath.substring(0, filePath.lastIndexOf('/'));
-		if (parentPath === folder) {
-			return true;
-		}
-	}
-	return false;
-}
 
 /**
  * Reindex the entire vault, reusing existing embeddings where content hasn't changed
@@ -175,7 +159,7 @@ export async function reindexVault(
 	onProgress?: (current: number, total: number, status: string) => void
 ): Promise<{ index: EmbeddingIndex; stats: { total: number; updated: number; reused: number } }> {
 	const allFiles = vault.getMarkdownFiles();
-	const eligibleFiles = allFiles.filter(f => !isFileExcludedByPath(f.path, excludedFolders));
+	const eligibleFiles = allFiles.filter(f => !isFileExcluded(f.path, excludedFolders));
 
 	// Build hash map from existing index for quick lookup
 	const existingChunks = new Map<string, EmbeddingChunk>();

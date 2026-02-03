@@ -151,11 +151,17 @@ Wraps EditInstruction with resolved file, current/new content, and error state.
 - `buildContextWithScopeConfig()` - Builds context string with line numbers using new config
 - `getLinkedFilesBFS()` - BFS traversal for multi-depth link resolution (excluded folders = walls)
 - `getSameFolderFiles()` - Gets all non-excluded files in same folder
-- `normalizeContextScope()` - Converts legacy `ContextScope` to new `ContextScopeConfig`
 
 **AIAssistantView**
-- `handleEditMode()` - Orchestrates Task Agent: calls agent → validates → filters → inserts blocks
+- `handleEditModeWithWebSourcesAndContext()` - Orchestrates Task Agent: calls agent → validates → filters → inserts blocks
 - `buildMessagesWithHistory()` - Builds API messages array with rich chat history context
+
+### src/modals/index.ts (UI components)
+- `TokenWarningModal` - Warns about high token counts
+- `PendingEditsModal` - Shows pending edits across files
+- `ContextPreviewModal` - Previews context notes before sending
+- `NotePickerModal` - Fuzzy picker for adding notes to context
+- `EditPreviewModal` - Preview and select edits before applying (reserved for batch preview)
 
 ### src/ai/prompts.ts (pure functions)
 - `buildScopeInstruction()` - Generates scope rules text
@@ -236,7 +242,7 @@ npm run build  # Production build
 
 ## File Structure
 ```
-main.ts              - Entry point, plugin lifecycle, UI classes
+main.ts              - Entry point, plugin lifecycle, UI classes (~5,200 lines)
 src/
   types.ts           - Shared type definitions (PipelineContext, NoteSelectionMetadata, etc.)
   ai/
@@ -251,6 +257,8 @@ src/
     semantic.ts      - Embedding generation and semantic search
   edits/
     diff.ts          - Diff utilities (computeDiff, longestCommonSubsequence)
+  modals/
+    index.ts         - Modal components (TokenWarningModal, PendingEditsModal, ContextPreviewModal, NotePickerModal, EditPreviewModal)
 styles.css           - Widget and view styling
 manifest.json        - Plugin metadata
 ```
