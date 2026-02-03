@@ -8,6 +8,7 @@
 import { TFile, Vault } from 'obsidian';
 import { NoteSelectionMetadata } from '../types';
 import { addLineNumbers } from './context';
+import { estimateTokens } from './searchApi';
 
 // Result from unified context builder
 export interface ContextBuilderResult {
@@ -47,13 +48,6 @@ const PRIORITY_FOLDER = 50;
 const PRIORITY_SEMANTIC = 30;
 const PRIORITY_KEYWORD = 40;
 const PRIORITY_MANUAL = 10;
-
-/**
- * Estimate tokens for a string (rough approximation: ~4 chars per token)
- */
-export function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
-}
 
 /**
  * Get priority from selection reason
@@ -279,31 +273,3 @@ export async function buildUnifiedContext(
 	};
 }
 
-/**
- * Build context from Scout agent result
- *
- * Convenience wrapper that extracts paths and metadata from Scout result.
- */
-export async function buildContextFromScoutResult(
-	vault: Vault,
-	task: string,
-	selectedPaths: string[],
-	selectedNotes: NoteSelectionMetadata[],
-	currentFilePath: string,
-	tokenBudget?: number
-): Promise<ContextBuilderResult> {
-	// Build metadata map from Scout result
-	const noteMetadata = new Map<string, NoteSelectionMetadata>();
-	for (const note of selectedNotes) {
-		noteMetadata.set(note.path, note);
-	}
-
-	return buildUnifiedContext(vault, {
-		task,
-		notePaths: selectedPaths,
-		noteMetadata,
-		tokenBudget,
-		currentFilePath,
-		includeMetadataAnnotations: true
-	});
-}

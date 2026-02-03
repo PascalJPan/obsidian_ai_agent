@@ -6,8 +6,7 @@
  */
 
 import { requestUrl } from 'obsidian';
-
-export type SearchApiType = 'openai' | 'serper' | 'brave' | 'tavily';
+import { SearchApiType } from '../types';
 
 export interface SearchResult {
 	title: string;

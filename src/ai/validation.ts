@@ -50,12 +50,31 @@ export function computeNewContent(currentContent: string, instruction: EditInstr
 	}
 
 	if (position.startsWith('after:')) {
-		const heading = position.substring(6);
+		const heading = position.substring(6).trim();
+
+		// Validate non-empty heading
+		if (!heading) {
+			return { content: '', error: 'Invalid position: heading is empty (position should be "after:## Heading Name")' };
+		}
+
+		// Try exact match first
 		const headingRegex = new RegExp(`^(${escapeRegex(heading)})\\s*$`, 'm');
-		const match = currentContent.match(headingRegex);
+		let match = currentContent.match(headingRegex);
+
+		// Fallback: case-insensitive match
+		if (!match) {
+			const caseInsensitiveRegex = new RegExp(`^(${escapeRegex(heading)})\\s*$`, 'mi');
+			match = currentContent.match(caseInsensitiveRegex);
+		}
 
 		if (!match || match.index === undefined) {
-			return { content: '', error: `Heading not found: "${heading}"` };
+			// Extract available headings for helpful error message
+			const availableHeadings = currentContent.match(/^#{1,6}\s+.+$/gm) || [];
+			const suggestions = availableHeadings.slice(0, 5).map(h => `"${h.trim()}"`).join(', ');
+			return {
+				content: '',
+				error: `Heading not found: "${heading}". Available headings: ${suggestions || 'none'}`
+			};
 		}
 
 		const headingEnd = match.index + match[0].length;

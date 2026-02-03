@@ -6,12 +6,11 @@ import { describe, it, expect } from 'vitest';
 import {
 	buildForbiddenActions,
 	buildScopeInstruction,
-	buildScopeInstructionWithConfig,
 	buildPositionTypes,
 	buildEditRules,
 	CORE_EDIT_PROMPT
 } from '../../src/ai/prompts';
-import { AICapabilities, EditableScope, ContextScopeConfig } from '../../src/types';
+import { AICapabilities } from '../../src/types';
 
 describe('buildForbiddenActions', () => {
 	const allCapabilities: AICapabilities = {
@@ -86,64 +85,6 @@ describe('buildScopeInstruction', () => {
 		const result = buildScopeInstruction('context');
 		expect(result).toContain('SCOPE RULE');
 		expect(result).toContain('any note provided in the context');
-	});
-});
-
-describe('buildScopeInstructionWithConfig', () => {
-	const baseConfig: ContextScopeConfig = {
-		linkDepth: 0,
-		maxLinkedNotes: 20,
-		maxFolderNotes: 0,
-		semanticMatchCount: 0,
-		semanticMinSimilarity: 50
-	};
-
-	it('includes link depth 0 description', () => {
-		const config: ContextScopeConfig = { ...baseConfig, linkDepth: 0 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).toContain('current note only');
-	});
-
-	it('includes link depth 1 description', () => {
-		const config: ContextScopeConfig = { ...baseConfig, linkDepth: 1 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).toContain('directly linked notes');
-	});
-
-	it('includes link depth 2 description', () => {
-		const config: ContextScopeConfig = { ...baseConfig, linkDepth: 2 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).toContain('2 hops');
-	});
-
-	it('includes link depth 3 description', () => {
-		const config: ContextScopeConfig = { ...baseConfig, linkDepth: 3 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).toContain('3 hops');
-	});
-
-	it('includes same folder when maxFolderNotes > 0', () => {
-		const config: ContextScopeConfig = { ...baseConfig, maxFolderNotes: 10 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).toContain('same folder');
-	});
-
-	it('does not include same folder when maxFolderNotes is 0', () => {
-		const config: ContextScopeConfig = { ...baseConfig, maxFolderNotes: 0 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).not.toContain('same folder');
-	});
-
-	it('includes semantic notes when semanticMatchCount > 0', () => {
-		const config: ContextScopeConfig = { ...baseConfig, semanticMatchCount: 5 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).toContain('semantically similar notes');
-	});
-
-	it('does not include semantic notes when semanticMatchCount is 0', () => {
-		const config: ContextScopeConfig = { ...baseConfig, semanticMatchCount: 0 };
-		const result = buildScopeInstructionWithConfig('context', config);
-		expect(result).not.toContain('semantically similar notes');
 	});
 });
 

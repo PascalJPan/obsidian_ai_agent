@@ -8,11 +8,10 @@
  * No vault or UI access.
  */
 
-import { AICapabilities, EditableScope, ContextScopeConfig } from '../types';
+import { AICapabilities, EditableScope } from '../types';
 
 // Token limit constants for validation
 export const BASE_SYSTEM_PROMPT_ESTIMATE = 2500; // Approximate tokens for full system prompt
-export const MINIMUM_CONTEXT_BUFFER = 500;       // Buffer for response and minimal context
 export const MINIMUM_TOKEN_LIMIT = 3000;         // Minimum allowed token limit setting
 
 // Helper: Get current date string for prompts
@@ -91,35 +90,6 @@ export function buildScopeInstruction(editableScope: EditableScope): string {
 	return `SCOPE RULE: ${scopeText}`;
 }
 
-// New version: Build scope instruction with context config details
-export function buildScopeInstructionWithConfig(editableScope: EditableScope, contextConfig: ContextScopeConfig): string {
-	let scopeText = '';
-
-	// Editable scope description
-	if (editableScope === 'current') {
-		scopeText = 'You may ONLY edit the current note (the first file in the context).';
-	} else if (editableScope === 'linked') {
-		scopeText = 'You may edit the current note and any directly linked notes (outgoing or backlinks).';
-	} else {
-		scopeText = 'You may edit any note provided in the context.';
-	}
-
-	// Add context details for AI awareness
-	const depthLabels = ['current note only', 'directly linked notes', 'notes up to 2 hops away', 'notes up to 3 hops away'];
-	const contextDesc = depthLabels[contextConfig.linkDepth];
-
-	let contextInfo = `Context includes: ${contextDesc}`;
-	if (contextConfig.maxFolderNotes > 0) {
-		contextInfo += ` + up to ${contextConfig.maxFolderNotes} notes in the same folder`;
-	}
-	if (contextConfig.semanticMatchCount > 0) {
-		contextInfo += ` + up to ${contextConfig.semanticMatchCount} semantically similar notes`;
-	}
-	contextInfo += '.';
-
-	return `SCOPE RULE: ${scopeText}\n\n${contextInfo}`;
-}
-
 // Helper: Build position types based on capabilities
 export function buildPositionTypes(capabilities: AICapabilities): string {
 	let positionTypes = `Position types (with examples):
@@ -179,7 +149,10 @@ Note: When deleting all content, you can delete lines 1-N where N is the last li
 - "open" - Open a note in a new tab (does not edit, just navigates)
   Example: { "file": "My Note.md", "position": "open", "content": "" }
   Use this when the user asks to open, show, or navigate to a note.
-  Note: The file must exist in the vault. Content field should be empty.`;
+  Note: The file must exist in the vault. Content field should be empty.
+  IMPORTANT: You MUST include the navigation in the edits array to actually open the note.
+  Do NOT just say "I opened the note" in the summary - that does NOT open the note!
+  The edit instruction is what triggers the actual navigation action.`;
 	}
 
 	return positionTypes;

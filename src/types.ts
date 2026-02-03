@@ -116,8 +116,6 @@ export interface InlineEdit {
 }
 
 // Agentic mode types
-export type AgenticSubMode = 'qa' | 'edit';
-
 export interface AgenticModeConfig {
 	scoutModel: string;       // Model for Phase 1 exploration
 	maxIterations: number;    // 1-10, max tool-calling rounds

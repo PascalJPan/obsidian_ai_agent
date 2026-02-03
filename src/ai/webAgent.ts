@@ -14,7 +14,8 @@
  */
 
 import { requestUrl } from 'obsidian';
-import { webSearch, fetchPage, SearchResult, estimateTokens, SearchApiType } from './searchApi';
+import { webSearch, fetchPage, SearchResult, estimateTokens } from './searchApi';
+import { SearchApiType, WebSource, WebAgentResult, WebAgentProgressEvent } from '../types';
 
 export interface WebAgentConfig {
 	searchApi: SearchApiType;
@@ -27,34 +28,6 @@ export interface WebAgentConfig {
 	autoSearch: boolean;      // Whether to automatically search when needed
 	minFetchPages: number;    // Minimum pages to fetch (1-3)
 	maxQueryRetries: number;  // Max query reformulation retries (0-2)
-}
-
-export interface WebSource {
-	url: string;
-	title: string;
-	summary: string;
-}
-
-export interface WebAgentResult {
-	searchPerformed: boolean;
-	webContext: string;           // Formatted for Answer agent
-	sources: WebSource[];
-	tokensUsed: number;
-	searchQuery?: string;
-	skipReason?: string;          // If search was skipped
-	error?: {                     // If search failed
-		message: string;
-		detail: string;
-	};
-	// Pipeline metadata
-	searchQueries?: string[];        // All queries attempted
-	evaluationReasoning?: string;    // Why search was/wasn't needed
-}
-
-export interface WebAgentProgressEvent {
-	type: 'evaluating' | 'searching' | 'fetching' | 'extracting' | 'complete' | 'skipped' | 'error';
-	message: string;
-	detail?: string;
 }
 
 // Tool definitions for the Web Agent
