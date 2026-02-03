@@ -73,7 +73,7 @@ import {
 	MINIMUM_TOKEN_LIMIT
 } from './src/ai/prompts';
 import { addLineNumbers, stripPendingEditBlocks } from './src/ai/context';
-import { escapeRegex, determineEditType, computeNewContent } from './src/ai/validation';
+import { computeNewContent } from './src/ai/validation';
 import { formatTokenUsage } from './src/ai/pricing';
 import { createLogger, summarizeSet, Logger } from './src/utils/logger';
 import {
@@ -82,6 +82,7 @@ import {
 	ContextPreviewModal,
 	NotePickerModal
 } from './src/modals';
+import { EditManager } from './src/edits/editManager';
 
 // View type constant
 const AI_ASSISTANT_VIEW_TYPE = 'ai-assistant-view';
@@ -215,6 +216,7 @@ export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
 	embeddingIndex: EmbeddingIndex | null = null;
 	logger: Logger;
+	editManager: EditManager;
 
 	// Cache of semantic file paths from most recent context build
 	// Used by getEditableFilesWithConfig() when editableScope === 'context'
@@ -228,6 +230,8 @@ export default class MyPlugin extends Plugin {
 	constructor(app: App, manifest: any) {
 		super(app, manifest);
 		this.logger = createLogger(() => this.settings?.debugMode ?? false);
+		// EditManager will be initialized in onload() after settings are loaded
+		this.editManager = null!; // Placeholder, initialized in onload
 	}
 
 	debugLog(label: string, data: unknown) {
@@ -241,6 +245,15 @@ export default class MyPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		// Initialize EditManager with dependencies
+		this.editManager = new EditManager({
+			vault: this.app.vault,
+			getPendingEditTag: () => this.settings.pendingEditTag,
+			logger: this.logger,
+			getActiveFile: () => this.app.workspace.getActiveFile(),
+			getMarkdownFiles: () => this.app.vault.getMarkdownFiles()
+		});
 
 		// Load embedding index
 		this.embeddingIndex = await loadEmbeddingIndex(
@@ -391,7 +404,7 @@ export default class MyPlugin extends Plugin {
 		}
 	}
 
-	// Render inline edit widget
+	// Render inline edit widget (UI remains in main.ts, resolution delegated to EditManager)
 	renderEditWidget(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) {
 		try {
 			const edit: InlineEdit = JSON.parse(source);
@@ -428,13 +441,13 @@ export default class MyPlugin extends Plugin {
 			const rejectBtn = actions.createEl('button', { cls: 'ai-edit-reject' });
 			rejectBtn.setText('Reject');
 			rejectBtn.addEventListener('click', async () => {
-				await this.resolveEdit(ctx.sourcePath, edit, 'reject');
+				await this.editManager.resolveEdit(ctx.sourcePath, edit, 'reject');
 			});
 
 			const acceptBtn = actions.createEl('button', { cls: 'ai-edit-accept' });
 			acceptBtn.setText('Accept');
 			acceptBtn.addEventListener('click', async () => {
-				await this.resolveEdit(ctx.sourcePath, edit, 'accept');
+				await this.editManager.resolveEdit(ctx.sourcePath, edit, 'accept');
 			});
 
 		} catch (e) {
@@ -443,67 +456,7 @@ export default class MyPlugin extends Plugin {
 		}
 	}
 
-	// Resolve an individual edit
-	async resolveEdit(filePath: string, edit: InlineEdit, action: 'accept' | 'reject') {
-		const file = this.app.vault.getAbstractFileByPath(filePath);
-		if (!(file instanceof TFile)) {
-			new Notice('Could not find file');
-			return;
-		}
-
-		let content = await this.app.vault.read(file);
-
-		// Build regex patterns to find the edit block
-		// Pattern 1: Exact JSON match
-		const exactBlockRegex = new RegExp(
-			'\\n?```ai-edit\\n' + escapeRegex(JSON.stringify(edit)) + '\\n```\\n?' +
-			escapeRegex(this.settings.pendingEditTag) + '\\n?',
-			'g'
-		);
-
-		// Pattern 2: Match by edit ID (more flexible for whitespace variations)
-		const idBlockRegex = new RegExp(
-			'\\n?```ai-edit\\n[^`]*?"id"\\s*:\\s*"' + escapeRegex(edit.id) + '"[^`]*?```\\n?' +
-			escapeRegex(this.settings.pendingEditTag) + '\\n?',
-			'g'
-		);
-
-		// Determine replacement content
-		let replacement = '';
-		if (action === 'accept') {
-			replacement = edit.after || '';
-		} else {
-			replacement = edit.before || '';
-		}
-
-		// Add a newline after non-empty replacements
-		const finalReplacement = replacement ? replacement + '\n' : '';
-
-		// Try exact pattern first, then fallback to ID-based pattern
-		const originalContent = content;
-		content = content.replace(exactBlockRegex, finalReplacement);
-
-		// If exact pattern didn't match, try ID-based pattern
-		if (content === originalContent) {
-			content = content.replace(idBlockRegex, finalReplacement);
-		}
-
-		// Clean up multiple consecutive newlines (more than 2) to at most 2
-		content = content.replace(/\n{3,}/g, '\n\n');
-
-		// Clean up trailing whitespace at end of file
-		content = content.replace(/\n+$/, '\n');
-
-		// Handle case where entire content was deleted
-		if (content.trim() === '') {
-			content = '';
-		}
-
-		await this.app.vault.modify(file, content);
-		new Notice(`Edit ${action}ed`);
-	}
-
-	// Render widget for AI-created notes
+	// Render widget for AI-created notes (UI remains in main.ts, resolution delegated to EditManager)
 	renderNewNoteWidget(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) {
 		try {
 			const data = JSON.parse(source);
@@ -518,14 +471,14 @@ export default class MyPlugin extends Plugin {
 			rejectBtn.setText('\u2717');
 			rejectBtn.title = 'Delete this note';
 			rejectBtn.addEventListener('click', async () => {
-				await this.resolveNewNote(ctx.sourcePath, data.id, 'reject');
+				await this.editManager.resolveNewNote(ctx.sourcePath, data.id, 'reject');
 			});
 
 			const acceptBtn = actions.createEl('button', { cls: 'ai-new-note-accept' });
 			acceptBtn.setText('\u2713');
 			acceptBtn.title = 'Keep this note';
 			acceptBtn.addEventListener('click', async () => {
-				await this.resolveNewNote(ctx.sourcePath, data.id, 'accept');
+				await this.editManager.resolveNewNote(ctx.sourcePath, data.id, 'accept');
 			});
 
 		} catch (e) {
@@ -534,133 +487,35 @@ export default class MyPlugin extends Plugin {
 		}
 	}
 
-	// Resolve a new note (accept = remove banner, reject = delete file)
-	async resolveNewNote(filePath: string, id: string, action: 'accept' | 'reject') {
-		const file = this.app.vault.getAbstractFileByPath(filePath);
-		if (!(file instanceof TFile)) {
-			new Notice('Could not find file');
-			return;
-		}
-
-		if (action === 'reject') {
-			// Delete the entire file
-			await this.app.vault.delete(file);
-			new Notice('Note deleted');
-		} else {
-			// Remove the banner (ai-new-note block + tag + separator)
-			let content = await this.app.vault.read(file);
-
-			// Remove the ai-new-note block, tag, and separator
-			const bannerRegex = new RegExp(
-				'```ai-new-note\\n[^`]*?"id"\\s*:\\s*"' + escapeRegex(id) + '"[^`]*?```\\n?' +
-				escapeRegex(this.settings.pendingEditTag) + '\\n*' +
-				'---\\n*',
-				'g'
-			);
-
-			content = content.replace(bannerRegex, '');
-			await this.app.vault.modify(file, content);
-			new Notice('Note accepted');
-		}
-	}
-
-	// Process next pending edit in current file (for keyboard shortcuts)
+	// Delegated to EditManager
 	async processNextEdit(action: 'accept' | 'reject') {
-		const file = this.app.workspace.getActiveFile();
-		if (!file) {
-			new Notice('No active file');
-			return;
-		}
-
-		const content = await this.app.vault.read(file);
-		const edits = this.extractEditsFromContent(content);
-
-		if (edits.length === 0) {
-			new Notice('No pending edits in current note');
-			return;
-		}
-
-		// Process the first edit
-		await this.resolveEdit(file.path, edits[0], action);
+		return this.editManager.processNextEdit(action);
 	}
 
-	// Batch process all pending edits (including new file banners)
+	// Delegated to EditManager
 	async batchProcessEdits(action: 'accept' | 'reject') {
-		const files = this.app.vault.getMarkdownFiles();
-		let totalProcessed = 0;
-
-		for (const file of files) {
-			const content = await this.app.vault.read(file);
-
-			// Process ai-edit blocks
-			if (content.includes('```ai-edit')) {
-				const edits = this.extractEditsFromContent(content);
-				for (const edit of edits) {
-					await this.resolveEdit(file.path, edit, action);
-					totalProcessed++;
-				}
-			}
-
-			// Process ai-new-note blocks (new file banners)
-			if (content.includes('```ai-new-note')) {
-				const newNoteIds = this.extractNewNoteIdsFromContent(content);
-				for (const id of newNoteIds) {
-					await this.resolveNewNote(file.path, id, action);
-					totalProcessed++;
-				}
-			}
-		}
-
-		new Notice(`${action === 'accept' ? 'Accepted' : 'Rejected'} ${totalProcessed} pending edit(s)`);
+		return this.editManager.batchProcessEdits(action);
 	}
 
-	// Extract edit objects from file content
+	// Delegated to EditManager (still used by showPendingEdits which needs UI access)
 	extractEditsFromContent(content: string): InlineEdit[] {
-		const edits: InlineEdit[] = [];
-		const regex = /```ai-edit\n([\s\S]*?)```/g;
-		let match;
-
-		while ((match = regex.exec(content)) !== null) {
-			try {
-				const edit = JSON.parse(match[1]);
-				edits.push(edit);
-			} catch (e) {
-				console.error('Failed to parse edit block:', e);
-			}
-		}
-
-		return edits;
+		return this.editManager.extractEditsFromContent(content);
 	}
 
-	// Extract new note IDs from ai-new-note blocks
+	// Delegated to EditManager (still used by showPendingEdits which needs UI access)
 	extractNewNoteIdsFromContent(content: string): string[] {
-		const ids: string[] = [];
-		const regex = /```ai-new-note\n([\s\S]*?)```/g;
-		let match;
-
-		while ((match = regex.exec(content)) !== null) {
-			try {
-				const data = JSON.parse(match[1]);
-				if (data.id) {
-					ids.push(data.id);
-				}
-			} catch (e) {
-				console.error('Failed to parse ai-new-note block:', e);
-			}
-		}
-
-		return ids;
+		return this.editManager.extractNewNoteIdsFromContent(content);
 	}
 
-	// Show all files with pending edits (including new file banners)
+	// Show all files with pending edits (UI logic stays in main.ts, uses EditManager helpers)
 	async showPendingEdits() {
 		const files = this.app.vault.getMarkdownFiles();
 		const filesWithEdits: { file: TFile; count: number }[] = [];
 
 		for (const file of files) {
 			const content = await this.app.vault.read(file);
-			const edits = this.extractEditsFromContent(content);
-			const newNoteIds = this.extractNewNoteIdsFromContent(content);
+			const edits = this.editManager.extractEditsFromContent(content);
+			const newNoteIds = this.editManager.extractNewNoteIdsFromContent(content);
 			const totalCount = edits.length + newNoteIds.length;
 			if (totalCount > 0) {
 				filesWithEdits.push({ file, count: totalCount });
@@ -701,229 +556,9 @@ export default class MyPlugin extends Plugin {
 		}
 	}
 
-	// Insert edit blocks into files
-	// Fixed: Groups edits by file and processes bottom-to-top to prevent line number misalignment
+	// Delegated to EditManager
 	async insertEditBlocks(validatedEdits: ValidatedEdit[]): Promise<{ success: number; failed: number }> {
-		this.logger.log('EDIT', 'Starting edit block insertion', {
-			totalEdits: validatedEdits.length,
-			validEdits: validatedEdits.filter(e => !e.error).length
-		});
-
-		let success = 0;
-		let failed = 0;
-
-		// Separate new file creations from edits to existing files
-		const newFileEdits: ValidatedEdit[] = [];
-		const existingFileEdits: ValidatedEdit[] = [];
-
-		for (const edit of validatedEdits) {
-			if (edit.error) {
-				failed++;
-				continue;
-			}
-			if (edit.isNewFile) {
-				newFileEdits.push(edit);
-			} else if (edit.resolvedFile) {
-				existingFileEdits.push(edit);
-			}
-		}
-
-		// Handle new file creations
-		for (const edit of newFileEdits) {
-			try {
-				const noteId = this.generateEditId();
-				const banner = this.createNewNoteBlock(noteId) + '\n\n---\n\n';
-				const filePath = edit.instruction.file;
-
-				// Ensure parent folders exist
-				const folderPath = filePath.substring(0, filePath.lastIndexOf('/'));
-				if (folderPath) {
-					const existingFolder = this.app.vault.getAbstractFileByPath(folderPath);
-					if (!existingFolder) {
-						await this.app.vault.createFolder(folderPath);
-					}
-				}
-
-				await this.app.vault.create(filePath, banner + edit.newContent);
-				success++;
-			} catch (e) {
-				console.error('Failed to create new file:', e);
-				failed++;
-			}
-		}
-
-		// Group existing file edits by file path
-		const editsByFile = new Map<string, ValidatedEdit[]>();
-		for (const edit of existingFileEdits) {
-			const path = edit.resolvedFile!.path;
-			if (!editsByFile.has(path)) {
-				editsByFile.set(path, []);
-			}
-			editsByFile.get(path)!.push(edit);
-		}
-
-		// Process each file's edits
-		for (const [filePath, edits] of editsByFile) {
-			try {
-				const file = this.app.vault.getAbstractFileByPath(filePath);
-				if (!(file instanceof TFile)) continue;
-
-				// Read file content once
-				let content = await this.app.vault.read(file);
-
-				// Sort edits by line number descending (bottom-to-top)
-				const sortedEdits = this.sortEditsByLineDescending(edits);
-
-				// Apply each edit to the content in memory
-				for (const edit of sortedEdits) {
-					const inlineEdit: InlineEdit = {
-						id: this.generateEditId(),
-						type: determineEditType(edit),
-						before: this.extractBeforeContent(edit, content),
-						after: edit.newContent !== edit.currentContent ? this.extractAfterContent(edit) : ''
-					};
-
-					content = this.applyEditBlockToContent(content, edit, inlineEdit);
-					success++;
-				}
-
-				// Write the file once with all edits applied
-				await this.app.vault.modify(file, content);
-			} catch (e) {
-				this.logger.error('EDIT', `Failed to insert edit blocks for file: ${filePath}`, e);
-				failed += edits.length;
-			}
-		}
-
-		this.logger.log('EDIT', 'Edit block insertion completed', {
-			success,
-			failed,
-			filesModified: editsByFile.size,
-			newFilesCreated: newFileEdits.length
-		});
-
-		return { success, failed };
-	}
-
-	// Get the line number for an edit (for sorting purposes)
-	getEditLineNumber(edit: ValidatedEdit): number {
-		const position = edit.instruction.position;
-
-		if (position === 'start') {
-			return 0; // Start goes at the very beginning
-		}
-		if (position === 'end') {
-			return Infinity; // End goes at the very end
-		}
-		if (position.startsWith('insert:')) {
-			return parseInt(position.substring(7), 10) || 0;
-		}
-		if (position.startsWith('replace:') || position.startsWith('delete:')) {
-			const lineSpec = position.split(':')[1];
-			const rangeMatch = lineSpec.match(/^(\d+)(?:-(\d+))?$/);
-			if (rangeMatch) {
-				return parseInt(rangeMatch[1], 10);
-			}
-		}
-		if (position.startsWith('after:')) {
-			// For headings, we need to find the line number in the content
-			// Return a high number since we can't easily determine without content
-			return Infinity - 1;
-		}
-		return 0;
-	}
-
-	// Sort edits by line number descending (bottom-to-top processing)
-	sortEditsByLineDescending(edits: ValidatedEdit[]): ValidatedEdit[] {
-		return [...edits].sort((a, b) => {
-			const lineA = this.getEditLineNumber(a);
-			const lineB = this.getEditLineNumber(b);
-			return lineB - lineA; // Descending order
-		});
-	}
-
-	// Apply an edit block to content string in memory
-	applyEditBlockToContent(content: string, validatedEdit: ValidatedEdit, inlineEdit: InlineEdit): string {
-		const position = validatedEdit.instruction.position;
-		const editBlock = this.createEditBlock(inlineEdit);
-
-		if (position === 'start') {
-			return editBlock + '\n\n' + content;
-		}
-		if (position === 'end') {
-			return content + '\n\n' + editBlock;
-		}
-		if (position.startsWith('after:')) {
-			const heading = position.substring(6);
-			const headingRegex = new RegExp(`^(${escapeRegex(heading)})\\s*$`, 'm');
-			const match = content.match(headingRegex);
-			if (match && match.index !== undefined) {
-				const headingEnd = match.index + match[0].length;
-				return content.substring(0, headingEnd) + '\n\n' + editBlock + content.substring(headingEnd);
-			}
-		}
-		if (position.startsWith('insert:')) {
-			const lineNum = parseInt(position.substring(7), 10);
-			const lines = content.split('\n');
-			lines.splice(lineNum - 1, 0, editBlock);
-			return lines.join('\n');
-		}
-		if (position.startsWith('replace:') || position.startsWith('delete:')) {
-			const lineSpec = position.split(':')[1];
-			const rangeMatch = lineSpec.match(/^(\d+)(?:-(\d+))?$/);
-			if (rangeMatch) {
-				const startLine = parseInt(rangeMatch[1], 10);
-				const endLine = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : startLine;
-				const lines = content.split('\n');
-				// Replace the lines with the edit block
-				lines.splice(startLine - 1, endLine - startLine + 1, editBlock);
-				return lines.join('\n');
-			}
-		}
-
-		return content;
-	}
-
-	// determineEditType is now imported from src/ai/validation.ts
-
-	// Extract the "before" content for the edit widget display
-	// contentOverride allows using modified in-memory content during batch processing
-	extractBeforeContent(edit: ValidatedEdit, contentOverride?: string): string {
-		const position = edit.instruction.position;
-		const content = contentOverride ?? edit.currentContent;
-
-		if (position.startsWith('replace:') || position.startsWith('delete:')) {
-			const lineSpec = position.split(':')[1];
-			const rangeMatch = lineSpec.match(/^(\d+)(?:-(\d+))?$/);
-			if (rangeMatch) {
-				const startLine = parseInt(rangeMatch[1], 10);
-				const endLine = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : startLine;
-				const lines = content.split('\n');
-
-				// Bounds checking
-				const safeStart = Math.max(0, Math.min(startLine - 1, lines.length));
-				const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
-
-				return lines.slice(safeStart, safeEnd).join('\n');
-			}
-		}
-		return '';
-	}
-
-	extractAfterContent(edit: ValidatedEdit): string {
-		return edit.instruction.content;
-	}
-
-	generateEditId(): string {
-		return Math.random().toString(36).substring(2, 10);
-	}
-
-	createEditBlock(edit: InlineEdit): string {
-		return '```ai-edit\n' + JSON.stringify(edit) + '\n```\n' + this.settings.pendingEditTag;
-	}
-
-	createNewNoteBlock(id: string): string {
-		return '```ai-new-note\n' + JSON.stringify({ id }) + '\n```\n' + this.settings.pendingEditTag;
+		return this.editManager.insertEditBlocks(validatedEdits);
 	}
 
 	// Context building methods - new version using ContextScopeConfig
@@ -1586,8 +1221,6 @@ export default class MyPlugin extends Plugin {
 	estimateTokens(text: string): number {
 		return Math.ceil(text.length / 4);
 	}
-
-	// escapeRegex is now imported from src/ai/validation.ts
 
 	isFileExcluded(file: TFile): boolean {
 		if (this.settings.excludedFolders.length === 0) return false;
