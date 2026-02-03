@@ -48,10 +48,10 @@ HANDLING QUESTIONS:
 export function buildForbiddenActions(capabilities: AICapabilities, editableScope: EditableScope): string {
 	const forbidden: string[] = [];
 
-	// Check if ALL edit capabilities are disabled (Q&A only mode)
+	// Check if ALL edit capabilities are disabled (answer only mode)
 	const allDisabled = !capabilities.canAdd && !capabilities.canDelete && !capabilities.canCreate && !capabilities.canNavigate;
 	if (allDisabled) {
-		return `\n\n## Q&A ONLY MODE:
+		return `\n\n## ANSWER ONLY MODE:
 All edit capabilities are disabled. You can ONLY answer questions.
 - Always return an empty edits array: { "edits": [], "summary": "your answer here" }
 - DO NOT propose any edits - they will all be rejected`;

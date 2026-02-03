@@ -14,17 +14,18 @@ Think of it as a collaborator that:
 
 ## Key Features
 
-**Three Modes**
-- **Q&A Mode** — Ask questions, get answers grounded in your notes
-- **Edit Mode** — Request changes and review them before they're applied
+**Two Modes**
+- **Standard Mode** — Uses your configured context settings (link depth, folder, semantic)
 - **Agentic Mode** — AI dynamically explores your vault to find relevant context
+
+In both modes, the Task Agent can answer questions or propose edits based on your request.
 
 **Agentic Mode** (New!)
 An AI scout agent explores your vault autonomously to find the best context for your task:
 - Uses tools like keyword search, semantic search, and link traversal
 - Shows live progress of exploration with collapsible action log
 - Selects notes based on task relevance, not static rules
-- Then executes your task (Q&A or edit) with the curated context
+- Then executes your task (answer or edit) with the curated context
 
 Scout agent tools include:
 - `view_all_notes` — Bird's-eye view of your entire vault with aliases/descriptions from YAML frontmatter
@@ -32,7 +33,7 @@ Scout agent tools include:
 - `search_keyword` / `search_semantic` — Find notes by keyword or meaning
 - `get_links_recursive` — Multi-hop link traversal to explore note connections
 
-**Flexible Context** (Q&A & Edit modes)
+**Flexible Context** (Standard mode)
 - Link depth slider (0-3): control how many hops of links to include
   - 0: Current note only
   - 1: Direct links (outgoing + backlinks)

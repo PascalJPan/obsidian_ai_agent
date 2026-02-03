@@ -46,10 +46,15 @@ import {
 	WebAgentSettings,
 	WebSource,
 	WebAgentResult,
-	WebAgentProgressEvent
+	WebAgentProgressEvent,
+	// Task Agent types
+	TaskAgentConfig,
+	TaskAgentInput,
+	TaskAgentResult
 } from './src/types';
 import { runContextAgent } from './src/ai/contextAgent';
 import { runWebAgent, formatWebContextForPrompt, WebAgentConfig } from './src/ai/webAgent';
+import { runTaskAgent } from './src/ai/taskAgent';
 import {
 	generateEmbedding,
 	searchSemantic,
@@ -80,7 +85,7 @@ interface MyPluginSettings {
 	aiModel: string;                // 'gpt-4o-mini' | 'gpt-4o' | 'gpt-4-turbo' | 'gpt-4' | 'gpt-5' | 'o1-mini' | 'o1'
 	customPromptCharacter: string;  // Shared across all modes (personality/tone)
 	customPromptEdit: string;       // Edit mode specific preferences
-	answerEditTokenLimit: number;   // Hard limit - notes removed if exceeded
+	taskAgentTokenLimit: number;   // Hard limit - notes removed if exceeded
 	pendingEditTag: string;
 	excludedFolders: string[];
 	chatHistoryLength: number;      // Number of previous messages to include (0-100)
@@ -135,7 +140,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	aiModel: 'gpt-5-mini',
 	customPromptCharacter: '',
 	customPromptEdit: '',
-	answerEditTokenLimit: 10000,
+	taskAgentTokenLimit: 10000,
 	pendingEditTag: '#ai_edit',
 	excludedFolders: [],
 	chatHistoryLength: 10,
@@ -317,9 +322,9 @@ export default class MyPlugin extends Plugin {
 					loaded.customPromptQA = loaded.systemPrompt;
 				}
 			}
-			// Migrate tokenWarningThreshold to answerEditTokenLimit
-			if (loaded.tokenWarningThreshold !== undefined && loaded.answerEditTokenLimit === undefined) {
-				loaded.answerEditTokenLimit = loaded.tokenWarningThreshold;
+			// Migrate tokenWarningThreshold to taskAgentTokenLimit
+			if (loaded.tokenWarningThreshold !== undefined && loaded.taskAgentTokenLimit === undefined) {
+				loaded.taskAgentTokenLimit = loaded.tokenWarningThreshold;
 			}
 			// Remove old settings
 			delete loaded.systemPrompt;
@@ -1908,7 +1913,7 @@ class AIAssistantView extends ItemView {
 		canNavigate: true
 	};
 	mode: Mode = 'edit';
-	// Note: agenticSubMode removed - scout agent decides Q&A vs Edit mode automatically
+	// Note: agenticSubMode removed - scout agent decides answer vs edit mode automatically
 	taskText = '';
 	isLoading = false;
 	chatMessages: ChatMessage[] = [];
@@ -2044,7 +2049,7 @@ class AIAssistantView extends ItemView {
 			this.updateToggleVisibility();
 		}, true);
 
-		// Note: Sub-mode toggle removed - scout agent now decides Q&A vs Edit mode automatically
+		// Note: Sub-mode toggle removed - scout agent now decides answer vs edit mode automatically
 
 		// Scout Agent settings panel (visible only in agentic mode)
 		this.scoutSettingsPanel = bottomSection.createEl('details', { cls: 'ai-assistant-toggle ai-scout-settings' });
@@ -3058,7 +3063,7 @@ class AIAssistantView extends ItemView {
 				await this.handleAgenticMode(file, userMessage);
 			} else {
 				// Build context with token limit enforcement
-				const tokenLimit = this.plugin.settings.answerEditTokenLimit;
+				const tokenLimit = this.plugin.settings.taskAgentTokenLimit;
 				const chatHistoryTokens = this.estimateChatHistoryTokens();
 
 				const contextResult = await this.plugin.buildContextWithTokenLimit(
@@ -3079,7 +3084,7 @@ class AIAssistantView extends ItemView {
 					);
 				}
 
-				// Edit mode handles both edits and Q&A
+				// Task Agent handles both edits and answers
 				await this.handleEditMode(contextResult.context, file.path);
 			}
 		} catch (error) {
@@ -3218,55 +3223,52 @@ class AIAssistantView extends ItemView {
 	}
 
 	async handleEditMode(context: string, activeFilePath: string) {
-		const systemPrompt = this.plugin.buildEditSystemPrompt(this.capabilities, this.editableScope);
-		const messages = this.buildMessagesWithHistory(systemPrompt, context);
-
-		this.plugin.debugLog('[PROMPT] Edit Mode messages', messages);
-
-		const response = await requestUrl({
-			url: 'https://api.openai.com/v1/chat/completions',
-			method: 'POST',
-			headers: {
-				'Authorization': `Bearer ${this.plugin.settings.openaiApiKey}`,
-				'Content-Type': 'application/json',
+		// Build agent configuration
+		const agentConfig: TaskAgentConfig = {
+			model: this.plugin.settings.aiModel,
+			apiKey: this.plugin.settings.openaiApiKey,
+			capabilities: this.capabilities,
+			editableScope: this.editableScope,
+			customPrompts: {
+				character: this.plugin.settings.customPromptCharacter,
+				edit: this.plugin.settings.customPromptEdit
 			},
-			body: JSON.stringify({
-				model: this.plugin.settings.aiModel,
-				response_format: { type: 'json_object' },
-				messages: messages,
-			}),
-		});
+			chatHistoryLength: this.plugin.settings.chatHistoryLength,
+			debugMode: this.plugin.settings.debugMode
+		};
 
-		const data = response.json;
-		const reply = data.choices?.[0]?.message?.content ?? '{}';
+		// Build agent input
+		const agentInput: TaskAgentInput = {
+			task: this.taskText,
+			context: context,
+			chatHistory: this.chatMessages
+		};
 
-		// Capture token usage from API response
-		const tokenUsage: TokenUsage | undefined = data.usage ? {
-			promptTokens: data.usage.prompt_tokens ?? 0,
-			completionTokens: data.usage.completion_tokens ?? 0,
-			totalTokens: data.usage.total_tokens ?? 0
-		} : undefined;
+		// Call the Task Agent
+		const agentResult = await runTaskAgent(
+			agentInput,
+			agentConfig,
+			this.plugin.logger
+		);
 
-		this.plugin.debugLog('[RESPONSE] Edit Mode raw reply', reply);
-		this.plugin.debugLog('[USAGE] Token usage', tokenUsage);
-
-		const editResponse = this.plugin.parseAIEditResponse(reply);
-		if (!editResponse) {
-			throw new Error('Failed to parse AI response as JSON');
+		// Handle agent error
+		if (!agentResult.success) {
+			throw new Error(agentResult.error || 'Task Agent failed');
 		}
 
-		if (!editResponse.edits || editResponse.edits.length === 0) {
-			this.addMessageToChat('assistant', editResponse.summary, {
+		// Handle answer response (no edits)
+		if (!agentResult.edits || agentResult.edits.length === 0) {
+			this.addMessageToChat('assistant', agentResult.summary, {
 				activeFile: activeFilePath,
 				proposedEdits: [],
 				editResults: { success: 0, failed: 0, failures: [] },
-				tokenUsage
+				tokenUsage: agentResult.tokenUsage
 			});
 			return;
 		}
 
-		// Validate edits
-		let validatedEdits = await this.plugin.validateEdits(editResponse.edits);
+		// Validate edits (vault-specific operation)
+		let validatedEdits = await this.plugin.validateEdits(agentResult.edits);
 
 		// HARD ENFORCEMENT: Filter edits by rules (capabilities and editable scope)
 		const activeFile = this.app.workspace.getActiveFile();
@@ -3315,7 +3317,7 @@ class AIAssistantView extends ItemView {
 		const searchTag = this.plugin.settings.pendingEditTag;
 		responseText += ` • [View all](obsidian://search?query=${encodeURIComponent(searchTag)})`;
 
-		responseText += `\n\n${editResponse.summary}`;
+		responseText += `\n\n${agentResult.summary}`;
 
 		// Add failure details if any edits failed
 		if (failedEdits.length > 0) {
@@ -3328,13 +3330,13 @@ class AIAssistantView extends ItemView {
 		// Store rich context for AI memory
 		this.addMessageToChat('assistant', responseText, {
 			activeFile: activeFilePath,
-			proposedEdits: editResponse.edits,
+			proposedEdits: agentResult.edits,
 			editResults: {
 				success: result.success,
 				failed: result.failed + navigationEdits.filter(e => e.error).length,
 				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
 			},
-			tokenUsage
+			tokenUsage: agentResult.tokenUsage
 		});
 	}
 
@@ -3409,11 +3411,11 @@ class AIAssistantView extends ItemView {
 			}
 		}
 
-		// Phase 3: Answer/Edit Agent
+		// Phase 3: Task Agent
 		const loadingEl = this.addLoadingIndicator();
 
 		try {
-			// Edit mode handles both edits and Q&A (questions return empty edits with answer in summary)
+			// Task Agent handles both edits and answers (questions return empty edits with answer in summary)
 			await this.handleEditModeWithWebSources(context, file.path, webResult?.sources);
 		} finally {
 			this.removeLoadingIndicator(loadingEl);
@@ -3586,64 +3588,55 @@ class AIAssistantView extends ItemView {
 	}
 
 	async handleEditModeWithWebSources(context: string, activeFilePath: string, webSources?: WebSource[]) {
-		const systemPrompt = this.plugin.buildEditSystemPrompt(this.capabilities, this.editableScope);
-
-		// Add instruction about citing web sources if available
-		let finalSystemPrompt = systemPrompt;
-		if (webSources && webSources.length > 0) {
-			finalSystemPrompt += '\n\n--- Web Sources ---\nYou have access to web research results in the context. When using information from web sources, cite them at the end of your response using markdown links: [Title](url)';
-		}
-
-		const messages = this.buildMessagesWithHistory(finalSystemPrompt, context);
-
-		this.plugin.debugLog('[PROMPT] Edit Mode messages (with web context)', messages);
-
-		const response = await requestUrl({
-			url: 'https://api.openai.com/v1/chat/completions',
-			method: 'POST',
-			headers: {
-				'Authorization': `Bearer ${this.plugin.settings.openaiApiKey}`,
-				'Content-Type': 'application/json',
+		// Build agent configuration
+		const agentConfig: TaskAgentConfig = {
+			model: this.plugin.settings.aiModel,
+			apiKey: this.plugin.settings.openaiApiKey,
+			capabilities: this.capabilities,
+			editableScope: this.editableScope,
+			customPrompts: {
+				character: this.plugin.settings.customPromptCharacter,
+				edit: this.plugin.settings.customPromptEdit
 			},
-			body: JSON.stringify({
-				model: this.plugin.settings.aiModel,
-				response_format: { type: 'json_object' },
-				messages: messages,
-			}),
-		});
+			chatHistoryLength: this.plugin.settings.chatHistoryLength,
+			debugMode: this.plugin.settings.debugMode
+		};
 
-		const data = response.json;
-		const reply = data.choices?.[0]?.message?.content ?? '{}';
+		// Build agent input (with web sources for citation instructions)
+		const agentInput: TaskAgentInput = {
+			task: this.taskText,
+			context: context,
+			chatHistory: this.chatMessages,
+			webSources: webSources
+		};
 
-		// Capture token usage from API response
-		const tokenUsage: TokenUsage | undefined = data.usage ? {
-			promptTokens: data.usage.prompt_tokens ?? 0,
-			completionTokens: data.usage.completion_tokens ?? 0,
-			totalTokens: data.usage.total_tokens ?? 0
-		} : undefined;
+		// Call the Task Agent
+		const agentResult = await runTaskAgent(
+			agentInput,
+			agentConfig,
+			this.plugin.logger
+		);
 
-		this.plugin.debugLog('[RESPONSE] Edit Mode raw reply', reply);
-		this.plugin.debugLog('[USAGE] Token usage', tokenUsage);
-
-		const editResponse = this.plugin.parseAIEditResponse(reply);
-		if (!editResponse) {
-			throw new Error('Failed to parse AI response as JSON');
+		// Handle agent error
+		if (!agentResult.success) {
+			throw new Error(agentResult.error || 'Task Agent failed');
 		}
 
-		if (!editResponse.edits || editResponse.edits.length === 0) {
+		// Handle answer response (no edits)
+		if (!agentResult.edits || agentResult.edits.length === 0) {
 			// Web sources are shown in the Web Sources widget, not inline
-			this.addMessageToChat('assistant', editResponse.summary, {
+			this.addMessageToChat('assistant', agentResult.summary, {
 				activeFile: activeFilePath,
 				proposedEdits: [],
 				editResults: { success: 0, failed: 0, failures: [] },
-				tokenUsage,
+				tokenUsage: agentResult.tokenUsage,
 				webSources
 			});
 			return;
 		}
 
-		// Rest of edit handling same as handleEditMode
-		let validatedEdits = await this.plugin.validateEdits(editResponse.edits);
+		// Validate edits (vault-specific operation)
+		let validatedEdits = await this.plugin.validateEdits(agentResult.edits);
 
 		const activeFile = this.app.workspace.getActiveFile();
 		if (activeFile) {
@@ -3685,7 +3678,7 @@ class AIAssistantView extends ItemView {
 		const searchTag = this.plugin.settings.pendingEditTag;
 		responseText += ` • [View all](obsidian://search?query=${encodeURIComponent(searchTag)})`;
 
-		responseText += `\n\n${editResponse.summary}`;
+		responseText += `\n\n${agentResult.summary}`;
 
 		if (failedEdits.length > 0) {
 			responseText += `\n\n**⚠ ${failedEdits.length} failed:**\n`;
@@ -3697,13 +3690,13 @@ class AIAssistantView extends ItemView {
 		// Web sources are shown in the Web Sources widget, not inline
 		this.addMessageToChat('assistant', responseText, {
 			activeFile: activeFilePath,
-			proposedEdits: editResponse.edits,
+			proposedEdits: agentResult.edits,
 			editResults: {
 				success: result.success,
 				failed: result.failed + navigationEdits.filter(e => e.error).length,
 				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
 			},
-			tokenUsage,
+			tokenUsage: agentResult.tokenUsage,
 			webSources
 		});
 	}
@@ -4290,7 +4283,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		// Edit Instructions - full-width textarea
 		const editInstrContainer = containerEl.createDiv({ cls: 'ai-settings-textarea-container' });
-		editInstrContainer.createEl('div', { text: 'Answer/Edit Instructions', cls: 'setting-item-name' });
+		editInstrContainer.createEl('div', { text: 'Task Agent Instructions', cls: 'setting-item-name' });
 		editInstrContainer.createEl('div', {
 			text: 'Optional: Preferences for how edits and responses should be made.',
 			cls: 'setting-item-description'
@@ -4399,14 +4392,14 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		// Token limit setting with minimum validation
 		const tokenLimitSetting = new Setting(containerEl)
-			.setName('Answer/Edit Token Limit')
+			.setName('Task Agent Token Limit')
 			.setDesc(`Hard limit for context tokens. Notes are removed (least important first) if exceeded. Minimum: ${MINIMUM_TOKEN_LIMIT}`);
 
 		let tokenLimitWarning: HTMLDivElement | null = null;
 
 		tokenLimitSetting.addText(text => {
 			text.setPlaceholder('10000')
-				.setValue(this.plugin.settings.answerEditTokenLimit.toString())
+				.setValue(this.plugin.settings.taskAgentTokenLimit.toString())
 				.onChange(async (value) => {
 					const num = parseInt(value, 10);
 					if (isNaN(num) || num <= 0) return;
@@ -4421,10 +4414,10 @@ class AIAssistantSettingTab extends PluginSettingTab {
 						// Show warning and auto-correct
 						tokenLimitWarning = tokenLimitSetting.settingEl.createDiv({ cls: 'ai-settings-warning' });
 						tokenLimitWarning.setText(`Value too low. Auto-corrected to minimum (${MINIMUM_TOKEN_LIMIT}).`);
-						this.plugin.settings.answerEditTokenLimit = MINIMUM_TOKEN_LIMIT;
+						this.plugin.settings.taskAgentTokenLimit = MINIMUM_TOKEN_LIMIT;
 						text.setValue(MINIMUM_TOKEN_LIMIT.toString());
 					} else {
-						this.plugin.settings.answerEditTokenLimit = num;
+						this.plugin.settings.taskAgentTokenLimit = num;
 					}
 					await this.plugin.saveSettings();
 				});
@@ -4731,7 +4724,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		const updateExpectedTokens = () => {
 			const iterations = this.plugin.settings.agenticMaxIterations;
 			const tokensPerIteration = this.plugin.settings.agenticMaxTokensPerIteration;
-			const answerLimit = this.plugin.settings.answerEditTokenLimit;
+			const answerLimit = this.plugin.settings.taskAgentTokenLimit;
 			const total = (iterations * tokensPerIteration) + answerLimit;
 			expectedTokensEl.setText(`Expected max tokens: ~${total.toLocaleString()} (${iterations} rounds × ${tokensPerIteration.toLocaleString()} + ${answerLimit.toLocaleString()} answer limit)`);
 		};
