@@ -55,7 +55,7 @@ The `canNavigate` capability allows the AI to open notes in new tabs when releva
 - Toast notification when notes are removed from context
 
 **Model Selection**
-- Choose your preferred OpenAI model (gpt-4o-mini, gpt-4o, gpt-4-turbo, o1, etc.)
+- Choose your preferred OpenAI model (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, o1, etc.)
 - Balance cost, speed, and capability for your workflow
 
 **Conversation Memory**

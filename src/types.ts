@@ -198,4 +198,57 @@ export interface ChatMessage {
 	};
 	// Token usage from API response (for assistant messages)
 	tokenUsage?: TokenUsage;
+	// Web agent results (for assistant messages in agentic mode)
+	webSources?: WebSource[];
+}
+
+// ============================================
+// Web Agent Types
+// ============================================
+
+export type SearchApiType = 'openai' | 'serper' | 'brave' | 'tavily';
+
+export interface WebAgentSettings {
+	enabled: boolean;              // Master toggle (default: false, opt-in)
+	searchApi: SearchApiType;      // Which search API to use
+	searchApiKey: string;          // API key for search service
+	snippetLimit: number;          // Max search results (default: 8)
+	fetchLimit: number;            // Max pages to fetch in full (default: 3)
+	tokenBudget: number;           // Max tokens for web content (default: 8000)
+	autoSearch: boolean;           // Automatically search when needed (default: true)
+}
+
+export interface WebSource {
+	url: string;
+	title: string;
+	summary: string;
+}
+
+export interface WebAgentResult {
+	searchPerformed: boolean;
+	webContext: string;
+	sources: WebSource[];
+	tokensUsed: number;
+	searchQuery?: string;
+	skipReason?: string;
+	error?: {
+		message: string;
+		detail: string;
+	};
+}
+
+export interface WebAgentProgressEvent {
+	type: 'evaluating' | 'searching' | 'fetching' | 'extracting' | 'complete' | 'skipped' | 'error';
+	message: string;
+	detail?: string;
+}
+
+// ============================================
+// Pipeline Configuration Types
+// ============================================
+
+export interface PipelineConfig {
+	scoutEnabled: boolean;         // Run Scout Agent (default: true in agentic mode)
+	webEnabled: boolean;           // Run Web Agent (default: false, opt-in)
+	answerEnabled: boolean;        // Run Answer/Edit Agent (default: true)
 }

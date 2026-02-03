@@ -28,14 +28,22 @@
 
 ### Context Selection Improvements
 - [x] **Add notes individually** - Picker UI implemented for manually adding notes to context
-- [ ] **Vault tags visibility** - Checkbox for whether all vault tags are visible to AI
 - [ ] Consider saved context presets/profiles
+
+### Future Enhancements
+- [ ] **Orchestrator Agent** - Meta-agent that routes tasks to appropriate pipeline
+  - Owns chat history, sends only relevant context to each agent
+  - Classifies task type and selects which agents to run
+  - Enables multi-round orchestration (Web → Scout → Edit)
+  - Strict modularity: clear input/output interfaces per agent
+  - Answer/Edit stay combined (no split needed)
+  - Smart context management to reduce token usage
 
 ### UI/UX Improvements
 - [x] **Move edit options to settings** - Moved edit rules toggle from chat tab to Obsidian settings panel
 
 ### Agentic Mode Enhancements
-- [ ] **Web search tool** - Add web search capability to agentic AI
+- [x] **Web Agent** - Modular web search pipeline phase (Scout → Web → Answer/Edit)
 - [x] **View all note names** - `view_all_notes` tool lists all note names with alias/description from YAML frontmatter
 - [x] **Vault exploration tool** - `explore_vault` tool for listing folder contents or finding notes by tag
 - [x] **Open note capability** - `canNavigate` capability allows AI to open notes in new tabs via `open` position
@@ -79,7 +87,7 @@ This is an Obsidian plugin that provides an agentic AI assistant for note editin
 - `canNavigate`: Allow opening notes in new tabs (executes immediately, not as pending edit)
 
 ### Settings (`MyPluginSettings`)
-- `aiModel`: OpenAI model to use (gpt-4o-mini, gpt-4o, gpt-4-turbo, etc.)
+- `aiModel`: OpenAI model to use (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, etc.)
 - `chatHistoryLength`: Number of previous messages to include (0-100, default 10)
 
 ## Core Data Structures
@@ -204,7 +212,9 @@ src/
   types.ts           - Shared type definitions
   ai/
     context.ts       - Context utilities (addLineNumbers)
-    contextAgent.ts  - Agentic mode Phase 1: vault exploration agent
+    contextAgent.ts  - Agentic mode Phase 1: vault exploration agent (Scout)
+    webAgent.ts      - Agentic mode Phase 2: web research agent
+    searchApi.ts     - Search API wrapper (OpenAI, Serper, Brave, Tavily) + page fetcher
     prompts.ts       - Prompt constants and builders
     validation.ts    - Edit validation (computeNewContent, determineEditType, escapeRegex)
     semantic.ts      - Embedding generation and semantic search
@@ -245,5 +255,31 @@ An AI agent that explores the vault to find relevant notes for the user's task.
 - `agenticKeywordLimit` (3-20, default 10): Max keyword search results
 - `agenticScoutModel`: Model for exploration (default: same as main model)
 
-### Phase 2: Task Agent
-Uses the context gathered in Phase 1 to execute the actual task (Q&A or Edit mode).
+### Phase 2: Web Agent (`webAgent.ts`)
+An optional AI agent that searches the web for external information when vault context is insufficient.
+
+**Flow:**
+1. EVALUATE: Determine if vault context can fully answer the task
+2. FORMULATE: Create optimized search query
+3. SEARCH: Get search results from API (OpenAI, Serper, Brave, or Tavily)
+4. SELECT: Choose which URLs to fetch in full
+5. FETCH: Get full page content with token budget
+6. EXTRACT: Pull relevant information
+
+**Tools available to the agent:**
+- `evaluate_context` - Determine if vault context is sufficient or web search needed
+- `web_search` - Search the web using configured API
+- `select_pages` - Choose which search results to fetch in full
+- `finalize_web_context` - Complete research and compile findings
+
+**Settings:**
+- `webAgentEnabled`: Master toggle (default: false, opt-in)
+- `webAgentSearchApi`: Which search API to use (openai, serper, brave, tavily)
+- `webAgentSearchApiKey`: API key for search service (not needed for OpenAI - uses main API key)
+- `webAgentSnippetLimit` (3-15, default 8): Max search results
+- `webAgentFetchLimit` (1-5, default 3): Max pages to fetch in full
+- `webAgentTokenBudget` (2000-20000, default 8000): Max tokens for web content
+- `webAgentAutoSearch`: Automatically search when needed (default: true)
+
+### Phase 3: Task Agent
+Uses the context gathered in Phase 1 and 2 to execute the actual task (Q&A or Edit mode).
