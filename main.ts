@@ -20,7 +20,7 @@ import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, requestUr
 import {
 	ContextScope,
 	EditableScope,
-	Mode,
+	AgentToggles,
 	AICapabilities,
 	EditInstruction,
 	AIEditResponse,
@@ -133,6 +133,8 @@ interface MyPluginSettings {
 	webAgentFetchLimit: number;            // Max pages to fetch in full (default: 3)
 	webAgentTokenBudget: number;           // Max tokens for web content (default: 8000)
 	webAgentAutoSearch: boolean;           // Automatically search when needed (default: true)
+	// Agent toggle states (persisted)
+	agentToggles: AgentToggles;            // Which agents are enabled
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -185,7 +187,9 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	webAgentSnippetLimit: 8,
 	webAgentFetchLimit: 3,
 	webAgentTokenBudget: 8000,
-	webAgentAutoSearch: true
+	webAgentAutoSearch: true,
+	// Agent toggle defaults: Scout OFF, Web OFF, Task ON
+	agentToggles: { scout: false, web: false, task: true }
 }
 
 // Type definitions now imported from src/types.ts
@@ -1912,8 +1916,8 @@ class AIAssistantView extends ItemView {
 		canCreate: true,
 		canNavigate: true
 	};
-	mode: Mode = 'edit';
-	// Note: agenticSubMode removed - scout agent decides answer vs edit mode automatically
+	// Agent toggles - initialized from settings in onOpen
+	agentToggles: AgentToggles = { scout: false, web: false, task: true };
 	taskText = '';
 	isLoading = false;
 	chatMessages: ChatMessage[] = [];
@@ -1941,10 +1945,12 @@ class AIAssistantView extends ItemView {
 	private semanticCountLabel: HTMLSpanElement | null = null;
 	private semanticSimilarityLabel: HTMLSpanElement | null = null;
 	private semanticWarningEl: HTMLDivElement | null = null;
-	// Agentic mode UI refs
+	// Agent toggle UI refs
 	private agentProgressContainer: HTMLDivElement | null = null;
-	// Note: agenticSubModeContainer removed - scout agent decides mode automatically
-	// Scout settings panel (inline in view when agentic mode selected)
+	private scoutToggleBtn: HTMLButtonElement | null = null;
+	private webToggleBtn: HTMLButtonElement | null = null;
+	private taskToggleBtn: HTMLButtonElement | null = null;
+	// Scout settings panel (inline in view when scout agent enabled)
 	private scoutSettingsPanel: HTMLDetailsElement | null = null;
 	private scoutIterationsLabel: HTMLSpanElement | null = null;
 	private scoutMaxNotesLabel: HTMLSpanElement | null = null;
@@ -1990,6 +1996,9 @@ class AIAssistantView extends ItemView {
 			canCreate: this.plugin.settings.defaultCanCreate,
 			canNavigate: this.plugin.settings.defaultCanNavigate
 		};
+
+		// Initialize agent toggles from settings
+		this.agentToggles = { ...this.plugin.settings.agentToggles };
 
 		// Chat header with clear button (top-left, fixed above chat)
 		const chatHeader = container.createDiv({ cls: 'ai-chat-header' });
@@ -2038,22 +2047,48 @@ class AIAssistantView extends ItemView {
 		this.submitButton.title = 'Send message';
 		this.submitButton.addEventListener('click', () => this.handleSubmit());
 
-		// Mode selector
-		const modeSection = bottomSection.createDiv({ cls: 'ai-assistant-mode-section' });
-		modeSection.createSpan({ text: 'Mode: ' });
-		this.createRadioGroup(modeSection, 'mode', [
-			{ value: 'edit', label: 'Focused', checked: true },
-			{ value: 'agentic', label: 'Agentic' }
-		], (value) => {
-			this.mode = value as Mode;
-			this.updateToggleVisibility();
-		}, true);
+		// Agent toggle buttons
+		const agentTogglesSection = bottomSection.createDiv({ cls: 'ai-agent-toggles' });
 
-		// Note: Sub-mode toggle removed - scout agent now decides answer vs edit mode automatically
+		// Scout toggle button
+		this.scoutToggleBtn = this.createAgentToggleButton(
+			agentTogglesSection,
+			'search',
+			'Scout',
+			this.agentToggles.scout,
+			(active) => {
+				this.agentToggles.scout = active;
+				this.onAgentToggleChange();
+			}
+		);
 
-		// Scout Agent settings panel (visible only in agentic mode)
+		// Web toggle button
+		this.webToggleBtn = this.createAgentToggleButton(
+			agentTogglesSection,
+			'globe',
+			'Web',
+			this.agentToggles.web,
+			(active) => {
+				this.agentToggles.web = active;
+				this.onAgentToggleChange();
+			}
+		);
+
+		// Task toggle button
+		this.taskToggleBtn = this.createAgentToggleButton(
+			agentTogglesSection,
+			'zap',
+			'Task',
+			this.agentToggles.task,
+			(active) => {
+				this.agentToggles.task = active;
+				this.onAgentToggleChange();
+			}
+		);
+
+		// Scout Agent settings panel (visible when scout is enabled)
 		this.scoutSettingsPanel = bottomSection.createEl('details', { cls: 'ai-assistant-toggle ai-scout-settings' });
-		this.scoutSettingsPanel.style.display = 'none'; // Hidden initially (edit mode)
+		this.scoutSettingsPanel.style.display = this.agentToggles.scout ? 'block' : 'none';
 		const scoutSummary = this.scoutSettingsPanel.createEl('summary');
 		scoutSummary.createSpan({ text: 'Scout Agent' });
 
@@ -2282,6 +2317,10 @@ class AIAssistantView extends ItemView {
 			this.lastActiveFilePath = initialFile.path;
 			this.showContextIndicator(initialFile.path, initialFile.basename);
 		}
+
+		// Initialize panel visibility and send button state
+		this.updateToggleVisibility();
+		this.updateSendButtonState();
 	}
 
 	autoResizeTextarea() {
@@ -2395,18 +2434,99 @@ class AIAssistantView extends ItemView {
 		}
 	}
 
-	// Note: updateAgenticSubModeVisibility removed - scout agent decides mode automatically
+	// Create an agent toggle button
+	createAgentToggleButton(
+		container: HTMLElement,
+		iconName: string,
+		label: string,
+		initialActive: boolean,
+		onChange: (active: boolean) => void
+	): HTMLButtonElement {
+		const btn = container.createEl('button', { cls: 'ai-agent-toggle-btn' });
+		if (initialActive) btn.addClass('active');
 
-	// Mode-specific toggle visibility
-	// Hide Context Notes toggle in agentic mode (agent selects context dynamically)
-	// Show Scout Agent settings only in agentic mode
+		const iconEl = btn.createDiv({ cls: 'icon' });
+		setIcon(iconEl, iconName);
+
+		btn.createDiv({ cls: 'label', text: label });
+
+		btn.addEventListener('click', () => {
+			const isActive = btn.hasClass('active');
+			if (isActive) {
+				btn.removeClass('active');
+			} else {
+				btn.addClass('active');
+			}
+			onChange(!isActive);
+		});
+
+		return btn;
+	}
+
+	// Called when any agent toggle changes
+	async onAgentToggleChange() {
+		// Save to settings
+		this.plugin.settings.agentToggles = { ...this.agentToggles };
+		await this.plugin.saveSettings();
+
+		// Update panel visibility
+		this.updateToggleVisibility();
+
+		// Update send button state
+		this.updateSendButtonState();
+	}
+
+	// Update panel visibility based on agent toggles
+	// Scout ON → show scout settings panel, hide manual context panel
+	// Scout OFF → show manual context panel, hide scout settings panel
 	updateToggleVisibility() {
 		if (this.contextDetails) {
-			this.contextDetails.style.display = this.mode === 'agentic' ? 'none' : 'block';
+			this.contextDetails.style.display = this.agentToggles.scout ? 'none' : 'block';
 		}
-		// Note: Edit Rules moved to Settings panel
 		if (this.scoutSettingsPanel) {
-			this.scoutSettingsPanel.style.display = this.mode === 'agentic' ? 'block' : 'none';
+			this.scoutSettingsPanel.style.display = this.agentToggles.scout ? 'block' : 'none';
+		}
+	}
+
+	// Disable send button when all agents are off
+	updateSendButtonState() {
+		if (!this.submitButton) return;
+
+		const anyAgentEnabled = this.agentToggles.scout || this.agentToggles.web || this.agentToggles.task;
+
+		if (anyAgentEnabled) {
+			this.submitButton.removeClass('disabled');
+			this.submitButton.disabled = false;
+			this.submitButton.title = 'Send message';
+		} else {
+			this.submitButton.addClass('disabled');
+			this.submitButton.disabled = true;
+			this.submitButton.title = 'Enable at least one agent to send';
+		}
+	}
+
+	// Sync toggle button UI state with agentToggles
+	syncAgentToggleButtons() {
+		if (this.scoutToggleBtn) {
+			if (this.agentToggles.scout) {
+				this.scoutToggleBtn.addClass('active');
+			} else {
+				this.scoutToggleBtn.removeClass('active');
+			}
+		}
+		if (this.webToggleBtn) {
+			if (this.agentToggles.web) {
+				this.webToggleBtn.addClass('active');
+			} else {
+				this.webToggleBtn.removeClass('active');
+			}
+		}
+		if (this.taskToggleBtn) {
+			if (this.agentToggles.task) {
+				this.taskToggleBtn.addClass('active');
+			} else {
+				this.taskToggleBtn.removeClass('active');
+			}
 		}
 	}
 
@@ -2558,7 +2678,22 @@ class AIAssistantView extends ItemView {
 		// Add selected notes toggle (collapsed)
 		const notesToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-notes-toggle' });
 		const notesSummary = notesToggle.createEl('summary');
-		notesSummary.setText(`\u25B8 Selected notes (${selectedPaths.length})`);
+		const notesSummaryText = notesSummary.createSpan();
+		notesSummaryText.setText(`\u25B8 Selected notes (${selectedPaths.length})`);
+
+		// Add copy button to summary
+		const copyBtn = notesSummary.createEl('button', {
+			cls: 'ai-agent-copy-btn',
+			attr: { 'aria-label': 'Copy all note contents' }
+		});
+		setIcon(copyBtn, 'clipboard-copy');
+		copyBtn.title = 'Copy all note contents';
+		copyBtn.addEventListener('click', async (e) => {
+			e.stopPropagation();
+			e.preventDefault();
+			await this.copySelectedNotesContent(selectedPaths);
+		});
+
 		const notesContent = notesToggle.createDiv({ cls: 'ai-agent-notes-content' });
 
 		const notesList = notesContent.createEl('ul', { cls: 'ai-agent-notes-list' });
@@ -2596,6 +2731,34 @@ class AIAssistantView extends ItemView {
 			this.agentProgressContainer.remove();
 			this.agentProgressContainer = null;
 		}
+	}
+
+	// Copy all selected note contents to clipboard
+	async copySelectedNotesContent(selectedPaths: string[]) {
+		const contents: string[] = [];
+
+		for (const path of selectedPaths) {
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) {
+				try {
+					const content = await this.app.vault.cachedRead(file);
+					// Get note name without extension
+					const noteName = file.basename;
+					contents.push(`# ${noteName}\n${content}`);
+				} catch (e) {
+					console.error(`Failed to read ${path}:`, e);
+				}
+			}
+		}
+
+		if (contents.length === 0) {
+			new Notice('No notes to copy');
+			return;
+		}
+
+		const fullContent = contents.join('\n\n');
+		await navigator.clipboard.writeText(fullContent);
+		new Notice(`Copied ${contents.length} note(s) to clipboard`);
 	}
 
 	async showContextPreview() {
@@ -3055,14 +3218,29 @@ class AIAssistantView extends ItemView {
 			this.autoResizeTextarea();
 		}
 
+		// Check that at least one agent is enabled
+		const { scout, web, task } = this.agentToggles;
+		if (!scout && !web && !task) {
+			new Notice('Enable at least one agent to send');
+			return;
+		}
+
 		this.setLoading(true);
-		const loadingEl = this.mode !== 'agentic' ? this.addLoadingIndicator() : null;
+		// Show loading indicator only if Scout is not running (Scout shows its own progress)
+		const loadingEl = !scout ? this.addLoadingIndicator() : null;
 
 		try {
-			if (this.mode === 'agentic') {
-				await this.handleAgenticMode(file, userMessage);
+			// Phase 1: Get context (Scout or manual)
+			let context: string;
+			let selectedPaths: string[] = [];
+
+			if (scout) {
+				// Scout Agent explores the vault
+				const scoutResult = await this.runScoutAgentPhase(file, userMessage);
+				selectedPaths = scoutResult.selectedPaths;
+				context = await this.buildContextFromPaths(selectedPaths, userMessage);
 			} else {
-				// Build context with token limit enforcement
+				// Manual context selection
 				const tokenLimit = this.plugin.settings.taskAgentTokenLimit;
 				const chatHistoryTokens = this.estimateChatHistoryTokens();
 
@@ -3084,8 +3262,34 @@ class AIAssistantView extends ItemView {
 					);
 				}
 
-				// Task Agent handles both edits and answers
-				await this.handleEditMode(contextResult.context, file.path);
+				context = contextResult.context;
+			}
+
+			// Phase 2: Web Agent (if enabled)
+			let webResult: WebAgentResult | null = null;
+			if (web) {
+				webResult = await this.runWebAgentPhase(userMessage, context);
+
+				// Merge web context if search was performed
+				if (webResult && webResult.searchPerformed && webResult.webContext) {
+					context = this.mergeWebContext(context, webResult);
+				}
+			}
+
+			// Phase 3: Task Agent (if enabled)
+			if (task) {
+				// Add loading indicator if not already showing
+				const taskLoadingEl = loadingEl || this.addLoadingIndicator();
+
+				try {
+					await this.handleEditModeWithWebSources(context, file.path, webResult?.sources);
+				} finally {
+					if (!loadingEl) this.removeLoadingIndicator(taskLoadingEl);
+				}
+			} else {
+				// Scout and/or Web ran, but Task is off
+				// Display what was found without running Task Agent
+				this.displayAgentOnlyResults(selectedPaths, webResult);
 			}
 		} catch (error) {
 			console.error('Submit error:', error);
@@ -3096,6 +3300,90 @@ class AIAssistantView extends ItemView {
 			this.removeLoadingIndicator(loadingEl);
 			this.setLoading(false);
 		}
+	}
+
+	// Run Scout Agent and return results
+	async runScoutAgentPhase(file: TFile, userMessage: string): Promise<ContextAgentResult> {
+		this.createAgentProgressContainer();
+
+		const agenticConfig: AgenticModeConfig = {
+			scoutModel: this.plugin.settings.agenticScoutModel === 'same'
+				? this.plugin.settings.aiModel
+				: this.plugin.settings.agenticScoutModel,
+			maxIterations: this.plugin.settings.agenticMaxIterations,
+			maxNotes: this.plugin.settings.agenticMaxNotes
+		};
+
+		const toolConfig: ScoutToolConfig = {
+			listNotes: this.plugin.settings.scoutToolListNotes,
+			searchKeyword: this.plugin.settings.scoutToolSearchKeyword,
+			searchSemantic: this.plugin.settings.scoutToolSearchSemantic,
+			searchTaskRelevant: this.plugin.settings.scoutToolSearchTaskRelevant,
+			getLinks: this.plugin.settings.scoutToolGetLinks,
+			getLinksRecursive: this.plugin.settings.scoutToolGetLinksRecursive,
+			viewAllNotes: this.plugin.settings.scoutToolViewAllNotes,
+			exploreVault: this.plugin.settings.scoutToolExploreVault,
+			keywordLimit: this.plugin.settings.agenticKeywordLimit,
+			semanticLimit: this.plugin.settings.scoutSemanticLimit,
+			listNotesLimit: this.plugin.settings.scoutListNotesLimit
+		};
+
+		const currentContent = await this.app.vault.cachedRead(file);
+
+		try {
+			const contextResult = await runContextAgent(
+				userMessage,
+				file,
+				currentContent,
+				agenticConfig,
+				this.app.vault,
+				this.app.metadataCache,
+				this.plugin.settings.excludedFolders,
+				this.plugin.embeddingIndex,
+				this.plugin.settings.openaiApiKey,
+				this.plugin.settings.embeddingModel,
+				toolConfig,
+				(event) => {
+					if (event.type === 'tool_call' || event.type === 'iteration') {
+						this.showAgentProgress(event.message, event.detail);
+					}
+				}
+			);
+
+			// Show Scout Agent completion status
+			this.completeAgentProgress(contextResult.selectedPaths.length, contextResult.reasoning, contextResult.selectedPaths);
+
+			return contextResult;
+		} catch (error) {
+			this.removeAgentProgress();
+			throw new Error(`Context agent failed: ${(error as Error).message}`);
+		}
+	}
+
+	// Display results when Task Agent is disabled
+	displayAgentOnlyResults(selectedPaths: string[], webResult: WebAgentResult | null) {
+		const file = this.app.workspace.getActiveFile();
+		const activeFilePath = file?.path || '';
+
+		let summary = '';
+
+		if (selectedPaths.length > 0) {
+			summary += `Scout Agent found ${selectedPaths.length} relevant note(s).`;
+		}
+
+		if (webResult && webResult.searchPerformed) {
+			if (summary) summary += ' ';
+			summary += `Web Agent found ${webResult.sources.length} source(s).`;
+		}
+
+		if (!summary) {
+			summary = 'No results found.';
+		}
+
+		this.addMessageToChat('assistant', summary, {
+			activeFile: activeFilePath,
+			webSources: webResult?.sources
+		});
 	}
 
 	// Show token warning modal and return true if user confirms, false if cancelled
@@ -3338,88 +3626,6 @@ class AIAssistantView extends ItemView {
 			},
 			tokenUsage: agentResult.tokenUsage
 		});
-	}
-
-	async handleAgenticMode(file: TFile, userMessage: string) {
-		// Phase 1: Scout Agent explores the vault
-		this.createAgentProgressContainer();
-
-		const agenticConfig: AgenticModeConfig = {
-			scoutModel: this.plugin.settings.agenticScoutModel === 'same'
-				? this.plugin.settings.aiModel
-				: this.plugin.settings.agenticScoutModel,
-			maxIterations: this.plugin.settings.agenticMaxIterations,
-			maxNotes: this.plugin.settings.agenticMaxNotes
-		};
-
-		// Build scout tool configuration from settings
-		const toolConfig: ScoutToolConfig = {
-			listNotes: this.plugin.settings.scoutToolListNotes,
-			searchKeyword: this.plugin.settings.scoutToolSearchKeyword,
-			searchSemantic: this.plugin.settings.scoutToolSearchSemantic,
-			searchTaskRelevant: this.plugin.settings.scoutToolSearchTaskRelevant,
-			getLinks: this.plugin.settings.scoutToolGetLinks,
-			getLinksRecursive: this.plugin.settings.scoutToolGetLinksRecursive,
-			viewAllNotes: this.plugin.settings.scoutToolViewAllNotes,
-			exploreVault: this.plugin.settings.scoutToolExploreVault,
-			keywordLimit: this.plugin.settings.agenticKeywordLimit,
-			semanticLimit: this.plugin.settings.scoutSemanticLimit,
-			listNotesLimit: this.plugin.settings.scoutListNotesLimit
-		};
-
-		const currentContent = await this.app.vault.cachedRead(file);
-
-		let contextResult: ContextAgentResult;
-		try {
-			contextResult = await runContextAgent(
-				userMessage,
-				file,
-				currentContent,
-				agenticConfig,
-				this.app.vault,
-				this.app.metadataCache,
-				this.plugin.settings.excludedFolders,
-				this.plugin.embeddingIndex,
-				this.plugin.settings.openaiApiKey,
-				this.plugin.settings.embeddingModel,
-				toolConfig,
-				(event) => {
-					if (event.type === 'tool_call' || event.type === 'iteration') {
-						this.showAgentProgress(event.message, event.detail);
-					}
-				}
-			);
-		} catch (error) {
-			this.removeAgentProgress();
-			throw new Error(`Context agent failed: ${(error as Error).message}`);
-		}
-
-		// Show Scout Agent completion status
-		this.completeAgentProgress(contextResult.selectedPaths.length, contextResult.reasoning, contextResult.selectedPaths);
-
-		// Build context from selected paths
-		let context = await this.buildContextFromPaths(contextResult.selectedPaths, userMessage);
-
-		// Phase 2: Web Agent (if enabled)
-		let webResult: WebAgentResult | null = null;
-		if (this.plugin.settings.webAgentEnabled && this.plugin.settings.webAgentSearchApiKey) {
-			webResult = await this.runWebAgentPhase(userMessage, context);
-
-			// Merge web context if search was performed
-			if (webResult && webResult.searchPerformed && webResult.webContext) {
-				context = this.mergeWebContext(context, webResult);
-			}
-		}
-
-		// Phase 3: Task Agent
-		const loadingEl = this.addLoadingIndicator();
-
-		try {
-			// Task Agent handles both edits and answers (questions return empty edits with answer in summary)
-			await this.handleEditModeWithWebSources(context, file.path, webResult?.sources);
-		} finally {
-			this.removeLoadingIndicator(loadingEl);
-		}
 	}
 
 	// Web Agent progress container
