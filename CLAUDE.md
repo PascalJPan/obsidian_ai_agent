@@ -73,6 +73,10 @@
   - `buildUnifiedContext()` consolidates context building
   - Per-note metadata annotations (semantic %, keyword match type)
   - Token limit enforcement with priority-based removal
+- [x] **EditManager extraction** - New `src/edits/editManager.ts`:
+  - Handles pending edit blocks and resolution (accept/reject)
+  - Manages edit insertion, batch processing, and new file creation
+  - Uses dependency injection for vault, logger, and settings access
 
 ## Architecture Overview
 
@@ -242,7 +246,7 @@ npm run build  # Production build
 
 ## File Structure
 ```
-main.ts              - Entry point, plugin lifecycle, UI classes (~5,200 lines)
+main.ts              - Entry point, plugin lifecycle, UI classes (~4,900 lines)
 src/
   types.ts           - Shared type definitions (PipelineContext, NoteSelectionMetadata, etc.)
   ai/
@@ -257,8 +261,11 @@ src/
     semantic.ts      - Embedding generation and semantic search
   edits/
     diff.ts          - Diff utilities (computeDiff, longestCommonSubsequence)
+    editManager.ts   - Edit lifecycle management (create/resolve/batch edit blocks)
   modals/
     index.ts         - Modal components (TokenWarningModal, PendingEditsModal, ContextPreviewModal, NotePickerModal, EditPreviewModal)
+  utils/
+    logger.ts        - Structured logging utility with category-based output
 styles.css           - Widget and view styling
 manifest.json        - Plugin metadata
 ```
