@@ -40,9 +40,16 @@ import {
 	AgenticModeConfig,
 	AgentProgressEvent,
 	ContextAgentResult,
-	ScoutToolConfig
+	ScoutToolConfig,
+	// Web Agent types
+	SearchApiType,
+	WebAgentSettings,
+	WebSource,
+	WebAgentResult,
+	WebAgentProgressEvent
 } from './src/types';
 import { runContextAgent } from './src/ai/contextAgent';
+import { runWebAgent, formatWebContextForPrompt, WebAgentConfig } from './src/ai/webAgent';
 import {
 	generateEmbedding,
 	searchSemantic,
@@ -113,11 +120,19 @@ interface MyPluginSettings {
 	scoutToolExploreVault: boolean;        // Explore folders and tags
 	scoutSemanticLimit: number;            // Max results for semantic search
 	scoutListNotesLimit: number;           // Max results for list_notes
+	// Web Agent settings
+	webAgentEnabled: boolean;              // Master toggle (default: false, opt-in)
+	webAgentSearchApi: SearchApiType;      // 'serper' | 'brave' | 'tavily'
+	webAgentSearchApiKey: string;          // API key for search service
+	webAgentSnippetLimit: number;          // Max search results (default: 8)
+	webAgentFetchLimit: number;            // Max pages to fetch in full (default: 3)
+	webAgentTokenBudget: number;           // Max tokens for web content (default: 8000)
+	webAgentAutoSearch: boolean;           // Automatically search when needed (default: true)
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
 	openaiApiKey: '',
-	aiModel: 'gpt-4o-mini',
+	aiModel: 'gpt-5-mini',
 	customPromptCharacter: '',
 	customPromptEdit: '',
 	answerEditTokenLimit: 10000,
@@ -157,7 +172,15 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	scoutToolViewAllNotes: true,
 	scoutToolExploreVault: true,
 	scoutSemanticLimit: 10,
-	scoutListNotesLimit: 30
+	scoutListNotesLimit: 30,
+	// Web Agent settings - opt-in by default
+	webAgentEnabled: false,
+	webAgentSearchApi: 'openai',
+	webAgentSearchApiKey: '',
+	webAgentSnippetLimit: 8,
+	webAgentFetchLimit: 3,
+	webAgentTokenBudget: 8000,
+	webAgentAutoSearch: true
 }
 
 // Type definitions now imported from src/types.ts
@@ -1487,6 +1510,10 @@ export default class MyPlugin extends Plugin {
 	buildEditSystemPrompt(capabilities: AICapabilities, editableScope: EditableScope): string {
 		const parts: string[] = [CORE_EDIT_PROMPT];
 
+		// Add current date so AI knows what "current" means
+		const currentDate = new Date().toISOString().split('T')[0];
+		parts.push(`\n\nTODAY'S DATE: ${currentDate}`);
+
 		// Add dynamic scope rules (hardcoded logic) - using imported function
 		parts.push('\n\n' + buildScopeInstruction(editableScope));
 
@@ -2797,6 +2824,7 @@ class AIAssistantView extends ItemView {
 			proposedEdits?: EditInstruction[];
 			editResults?: { success: number; failed: number; failures: Array<{ file: string; error: string }> };
 			tokenUsage?: TokenUsage;
+			webSources?: WebSource[];
 		}
 	) {
 		const message: ChatMessage = {
@@ -2807,7 +2835,8 @@ class AIAssistantView extends ItemView {
 			activeFile: metadata?.activeFile,
 			proposedEdits: metadata?.proposedEdits,
 			editResults: metadata?.editResults,
-			tokenUsage: metadata?.tokenUsage
+			tokenUsage: metadata?.tokenUsage,
+			webSources: metadata?.webSources
 		};
 		this.chatMessages.push(message);
 		this.renderMessage(message);
@@ -2847,6 +2876,23 @@ class AIAssistantView extends ItemView {
 				'',
 				this
 			);
+
+			// Add web sources footer if available
+			if (message.webSources && message.webSources.length > 0) {
+				const sourcesEl = bubbleEl.createDiv({ cls: 'ai-chat-web-sources' });
+				sourcesEl.createDiv({ cls: 'ai-chat-web-sources-header', text: 'Web Sources' });
+				const sourcesList = sourcesEl.createEl('ul', { cls: 'ai-chat-web-sources-list' });
+				for (const source of message.webSources) {
+					const li = sourcesList.createEl('li');
+					const link = li.createEl('a', {
+						text: source.title,
+						href: source.url,
+						cls: 'ai-chat-web-source-link'
+					});
+					link.setAttr('target', '_blank');
+					link.setAttr('rel', 'noopener noreferrer');
+				}
+			}
 
 			// Add token usage footer if available and enabled
 			if (message.tokenUsage && this.plugin.settings.showTokenUsage) {
@@ -3293,7 +3339,7 @@ class AIAssistantView extends ItemView {
 	}
 
 	async handleAgenticMode(file: TFile, userMessage: string) {
-		// Phase 1: Context Agent explores the vault
+		// Phase 1: Scout Agent explores the vault
 		this.createAgentProgressContainer();
 
 		const agenticConfig: AgenticModeConfig = {
@@ -3346,21 +3392,320 @@ class AIAssistantView extends ItemView {
 			throw new Error(`Context agent failed: ${(error as Error).message}`);
 		}
 
-		// Show completion status
+		// Show Scout Agent completion status
 		this.completeAgentProgress(contextResult.selectedPaths.length, contextResult.reasoning, contextResult.selectedPaths);
 
-		// Phase 2: Build context from selected paths and run task agent
-		const context = await this.buildContextFromPaths(contextResult.selectedPaths, userMessage);
+		// Build context from selected paths
+		let context = await this.buildContextFromPaths(contextResult.selectedPaths, userMessage);
 
-		// Add loading indicator for phase 2
+		// Phase 2: Web Agent (if enabled)
+		let webResult: WebAgentResult | null = null;
+		if (this.plugin.settings.webAgentEnabled && this.plugin.settings.webAgentSearchApiKey) {
+			webResult = await this.runWebAgentPhase(userMessage, context);
+
+			// Merge web context if search was performed
+			if (webResult && webResult.searchPerformed && webResult.webContext) {
+				context = this.mergeWebContext(context, webResult);
+			}
+		}
+
+		// Phase 3: Answer/Edit Agent
 		const loadingEl = this.addLoadingIndicator();
 
 		try {
 			// Edit mode handles both edits and Q&A (questions return empty edits with answer in summary)
-			await this.handleEditMode(context, file.path);
+			await this.handleEditModeWithWebSources(context, file.path, webResult?.sources);
 		} finally {
 			this.removeLoadingIndicator(loadingEl);
 		}
+	}
+
+	// Web Agent progress container
+	private webAgentProgressContainer: HTMLDivElement | null = null;
+	private webAgentStepsContainer: HTMLDivElement | null = null;
+
+	async runWebAgentPhase(task: string, vaultContext: string): Promise<WebAgentResult | null> {
+		// Create Web Agent progress container
+		this.createWebAgentProgressContainer();
+
+		const webConfig: WebAgentConfig = {
+			searchApi: this.plugin.settings.webAgentSearchApi,
+			searchApiKey: this.plugin.settings.webAgentSearchApiKey,
+			snippetLimit: this.plugin.settings.webAgentSnippetLimit,
+			fetchLimit: this.plugin.settings.webAgentFetchLimit,
+			tokenBudget: this.plugin.settings.webAgentTokenBudget,
+			model: this.plugin.settings.agenticScoutModel === 'same'
+				? this.plugin.settings.aiModel
+				: this.plugin.settings.agenticScoutModel,
+			openaiApiKey: this.plugin.settings.openaiApiKey,
+			autoSearch: this.plugin.settings.webAgentAutoSearch
+		};
+
+		try {
+			const result = await runWebAgent(
+				task,
+				vaultContext,
+				webConfig,
+				(event) => {
+					this.showWebAgentProgress(event.message, event.detail);
+				}
+			);
+
+			// Show completion status
+			this.completeWebAgentProgress(result);
+
+			return result;
+		} catch (error) {
+			this.plugin.logger.error('WEB_AGENT', 'Web agent failed', error);
+			// Show error in progress container
+			this.showWebAgentProgress('Web search failed', (error as Error).message);
+			return null;
+		}
+	}
+
+	createWebAgentProgressContainer(): HTMLDivElement {
+		if (!this.chatContainer) {
+			throw new Error('Chat container not available');
+		}
+
+		this.webAgentProgressContainer = this.chatContainer.createDiv({ cls: 'ai-agent-progress-container ai-web-agent-progress' });
+
+		const headerEl = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-header' });
+		headerEl.createSpan({ cls: 'ai-agent-progress-icon', text: '\uD83C\uDF10' }); // Globe emoji
+		headerEl.createSpan({ cls: 'ai-agent-progress-title', text: ' Web Agent' });
+
+		// Create collapsible actions toggle
+		const actionsToggle = this.webAgentProgressContainer.createEl('details', { cls: 'ai-agent-actions-toggle' });
+		actionsToggle.open = true;
+		const actionsSummary = actionsToggle.createEl('summary');
+		actionsSummary.setText('\u25B8 Web research actions');
+
+		this.webAgentStepsContainer = actionsToggle.createDiv({ cls: 'ai-agent-steps-container' });
+
+		this.scrollChatToBottom();
+		return this.webAgentProgressContainer;
+	}
+
+	showWebAgentProgress(message: string, detail?: string) {
+		if (!this.webAgentStepsContainer) return;
+
+		const stepEl = this.webAgentStepsContainer.createDiv({ cls: 'ai-agent-progress-step' });
+		const bulletEl = stepEl.createSpan({ cls: 'ai-agent-progress-bullet' });
+		bulletEl.setText('\u2022');
+		const textEl = stepEl.createSpan({ cls: 'ai-agent-progress-text' });
+		textEl.setText(message);
+		if (detail) {
+			const detailEl = stepEl.createSpan({ cls: 'ai-agent-progress-detail' });
+			detailEl.setText(` \u2192 ${detail}`);
+		}
+
+		this.scrollChatToBottom();
+	}
+
+	completeWebAgentProgress(result: WebAgentResult) {
+		if (!this.webAgentProgressContainer) return;
+
+		// Add completed class
+		this.webAgentProgressContainer.addClass('completed');
+
+		const header = this.webAgentProgressContainer.querySelector('.ai-agent-progress-header');
+		if (header) {
+			header.empty();
+			if (result.searchPerformed) {
+				header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2713' });
+				header.createSpan({ cls: 'ai-agent-progress-title', text: ` Web research complete (${result.sources.length} sources)` });
+			} else {
+				header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2014' }); // Em dash
+				header.createSpan({ cls: 'ai-agent-progress-title', text: ' Web search skipped' });
+			}
+		}
+
+		// Collapse actions toggle
+		const actionsToggle = this.webAgentProgressContainer.querySelector('.ai-agent-actions-toggle') as HTMLDetailsElement;
+		if (actionsToggle) {
+			actionsToggle.open = false;
+		}
+
+		// Add sources list if search was performed
+		if (result.searchPerformed && result.sources.length > 0) {
+			const sourcesToggle = this.webAgentProgressContainer.createEl('details', { cls: 'ai-agent-notes-toggle' });
+			const sourcesSummary = sourcesToggle.createEl('summary');
+			sourcesSummary.setText(`\u25B8 Sources (${result.sources.length})`);
+			const sourcesContent = sourcesToggle.createDiv({ cls: 'ai-agent-notes-content' });
+
+			const sourcesList = sourcesContent.createEl('ul', { cls: 'ai-agent-notes-list' });
+			for (const source of result.sources) {
+				const sourceItem = sourcesList.createEl('li');
+				const sourceLink = sourceItem.createEl('a', {
+					text: source.title || source.url,
+					href: source.url,
+					cls: 'external-link'
+				});
+				sourceLink.setAttr('target', '_blank');
+				if (source.summary) {
+					sourceItem.createSpan({ text: ` - ${source.summary}`, cls: 'ai-agent-progress-detail' });
+				}
+			}
+
+			// Token usage
+			const tokenInfo = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-step' });
+			tokenInfo.createSpan({ text: `Tokens used: ${result.tokensUsed.toLocaleString()} / ${this.plugin.settings.webAgentTokenBudget.toLocaleString()}`, cls: 'ai-agent-progress-detail' });
+		}
+
+		// Show skip reason if not searched
+		if (!result.searchPerformed && result.skipReason) {
+			const skipInfo = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-step' });
+			skipInfo.createSpan({ text: result.skipReason, cls: 'ai-agent-progress-detail' });
+		}
+
+		// Show error if present
+		if (result.error) {
+			const errorInfo = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-step ai-web-agent-error' });
+			errorInfo.createSpan({ text: `Error: ${result.error.message}`, cls: 'ai-agent-progress-detail' });
+		}
+
+		this.scrollChatToBottom();
+	}
+
+	mergeWebContext(vaultContext: string, webResult: WebAgentResult): string {
+		// Insert web context after the task section
+		const webSection = formatWebContextForPrompt(webResult);
+		if (!webSection) return vaultContext;
+
+		// Find the end of the task section and insert web context there
+		const taskEndMarker = '=== END USER TASK ===';
+		const insertPos = vaultContext.indexOf(taskEndMarker);
+
+		if (insertPos !== -1) {
+			const afterTaskEnd = insertPos + taskEndMarker.length;
+			return vaultContext.substring(0, afterTaskEnd) + '\n\n' + webSection + vaultContext.substring(afterTaskEnd);
+		}
+
+		// Fallback: prepend web context
+		return webSection + '\n\n' + vaultContext;
+	}
+
+	async handleEditModeWithWebSources(context: string, activeFilePath: string, webSources?: WebSource[]) {
+		const systemPrompt = this.plugin.buildEditSystemPrompt(this.capabilities, this.editableScope);
+
+		// Add instruction about citing web sources if available
+		let finalSystemPrompt = systemPrompt;
+		if (webSources && webSources.length > 0) {
+			finalSystemPrompt += '\n\n--- Web Sources ---\nYou have access to web research results in the context. When using information from web sources, cite them at the end of your response using markdown links: [Title](url)';
+		}
+
+		const messages = this.buildMessagesWithHistory(finalSystemPrompt, context);
+
+		this.plugin.debugLog('[PROMPT] Edit Mode messages (with web context)', messages);
+
+		const response = await requestUrl({
+			url: 'https://api.openai.com/v1/chat/completions',
+			method: 'POST',
+			headers: {
+				'Authorization': `Bearer ${this.plugin.settings.openaiApiKey}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				model: this.plugin.settings.aiModel,
+				response_format: { type: 'json_object' },
+				messages: messages,
+			}),
+		});
+
+		const data = response.json;
+		const reply = data.choices?.[0]?.message?.content ?? '{}';
+
+		// Capture token usage from API response
+		const tokenUsage: TokenUsage | undefined = data.usage ? {
+			promptTokens: data.usage.prompt_tokens ?? 0,
+			completionTokens: data.usage.completion_tokens ?? 0,
+			totalTokens: data.usage.total_tokens ?? 0
+		} : undefined;
+
+		this.plugin.debugLog('[RESPONSE] Edit Mode raw reply', reply);
+		this.plugin.debugLog('[USAGE] Token usage', tokenUsage);
+
+		const editResponse = this.plugin.parseAIEditResponse(reply);
+		if (!editResponse) {
+			throw new Error('Failed to parse AI response as JSON');
+		}
+
+		if (!editResponse.edits || editResponse.edits.length === 0) {
+			// Web sources are shown in the Web Sources widget, not inline
+			this.addMessageToChat('assistant', editResponse.summary, {
+				activeFile: activeFilePath,
+				proposedEdits: [],
+				editResults: { success: 0, failed: 0, failures: [] },
+				tokenUsage,
+				webSources
+			});
+			return;
+		}
+
+		// Rest of edit handling same as handleEditMode
+		let validatedEdits = await this.plugin.validateEdits(editResponse.edits);
+
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile) {
+			validatedEdits = this.plugin.filterEditsByRulesWithConfig(
+				validatedEdits,
+				activeFile,
+				this.editableScope,
+				this.capabilities,
+				this.contextScopeConfig
+			);
+		}
+
+		const navigationEdits = validatedEdits.filter(e => !e.error && e.instruction.position === 'open');
+		const contentEdits = validatedEdits.filter(e => e.instruction.position !== 'open');
+
+		let navigationSuccess = 0;
+		for (const nav of navigationEdits) {
+			const navFile = nav.resolvedFile;
+			if (navFile) {
+				try {
+					await this.app.workspace.getLeaf('tab').openFile(navFile);
+					navigationSuccess++;
+				} catch (e) {
+					nav.error = `Failed to open note: ${(e as Error).message}`;
+				}
+			} else {
+				nav.error = `Note not found: ${nav.instruction.file}`;
+			}
+		}
+
+		const result = await this.plugin.insertEditBlocks(contentEdits);
+		result.success += navigationSuccess;
+
+		const fileCount = new Set(validatedEdits.filter(e => !e.error).map(e => e.instruction.file)).size;
+		const failedEdits = validatedEdits.filter(e => e.error);
+
+		let responseText = `**✓ ${result.success}** edit${result.success !== 1 ? 's' : ''} • **📄 ${fileCount}** file${fileCount !== 1 ? 's' : ''}`;
+
+		const searchTag = this.plugin.settings.pendingEditTag;
+		responseText += ` • [View all](obsidian://search?query=${encodeURIComponent(searchTag)})`;
+
+		responseText += `\n\n${editResponse.summary}`;
+
+		if (failedEdits.length > 0) {
+			responseText += `\n\n**⚠ ${failedEdits.length} failed:**\n`;
+			for (const edit of failedEdits) {
+				responseText += `- ${edit.instruction.file}: ${edit.error}\n`;
+			}
+		}
+
+		// Web sources are shown in the Web Sources widget, not inline
+		this.addMessageToChat('assistant', responseText, {
+			activeFile: activeFilePath,
+			proposedEdits: editResponse.edits,
+			editResults: {
+				success: result.success,
+				failed: result.failed + navigationEdits.filter(e => e.error).length,
+				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
+			},
+			tokenUsage,
+			webSources
+		});
 	}
 
 	// Build context string from explicit list of file paths
@@ -3863,11 +4208,13 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			.setName('AI Model')
 			.setDesc('Model for answers and edits')
 			.addDropdown(dropdown => dropdown
-				.addOption('gpt-4o-mini', 'gpt-4o-mini (default, cheapest)')
+				.addOption('gpt-5-mini', 'gpt-5-mini (recommended)')
+				.addOption('gpt-5-nano', 'gpt-5-nano (cheapest)')
+				.addOption('gpt-5', 'gpt-5 (reasoning)')
+				.addOption('gpt-5.1', 'gpt-5.1')
+				.addOption('gpt-5.2', 'gpt-5.2')
+				.addOption('gpt-4o-mini', 'gpt-4o-mini')
 				.addOption('gpt-4o', 'gpt-4o')
-				.addOption('gpt-4-turbo', 'gpt-4-turbo')
-				.addOption('gpt-4', 'gpt-4')
-				.addOption('gpt-4.5-preview', 'gpt-4.5-preview')
 				.addOption('o1-mini', 'o1-mini')
 				.addOption('o1', 'o1')
 				.addOption('o3-mini', 'o3-mini')
@@ -3882,7 +4229,9 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			.setDesc('Model for agentic mode context exploration. Use a fast model to reduce latency.')
 			.addDropdown(dropdown => dropdown
 				.addOption('same', 'Same as main model')
-				.addOption('gpt-4o-mini', 'gpt-4o-mini (fast, cheap)')
+				.addOption('gpt-5-nano', 'gpt-5-nano (fastest, cheapest)')
+				.addOption('gpt-5-mini', 'gpt-5-mini (fast)')
+				.addOption('gpt-4o-mini', 'gpt-4o-mini')
 				.addOption('gpt-4o', 'gpt-4o')
 				.setValue(this.plugin.settings.agenticScoutModel)
 				.onChange(async (value) => {
@@ -4471,7 +4820,124 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				}));
 
 		// ============================================
-		// SECTION 7: Developer
+		// SECTION 7: Web Agent
+		// ============================================
+		containerEl.createEl('h3', { text: 'Web Agent' });
+		containerEl.createEl('p', {
+			text: 'Enable web search capabilities for external research in agentic mode. Requires a search API key.',
+			cls: 'setting-item-description'
+		});
+
+		new Setting(containerEl)
+			.setName('Enable Web Agent')
+			.setDesc('Allow the AI to search the web when vault context is insufficient')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.webAgentEnabled)
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentEnabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Store reference to API key setting so we can show/hide it
+		let apiKeySetting: Setting | null = null;
+
+		new Setting(containerEl)
+			.setName('Search API')
+			.setDesc('Which search API to use for web searches')
+			.addDropdown(dropdown => dropdown
+				.addOption('openai', 'OpenAI Web Search (uses main API key)')
+				.addOption('serper', 'Serper.dev (~$0.001/search)')
+				.addOption('brave', 'Brave Search')
+				.addOption('tavily', 'Tavily')
+				.setValue(this.plugin.settings.webAgentSearchApi)
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentSearchApi = value as SearchApiType;
+					await this.plugin.saveSettings();
+					// Show/hide API key field based on selection
+					if (apiKeySetting) {
+						apiKeySetting.settingEl.style.display = value === 'openai' ? 'none' : '';
+					}
+				}));
+
+		apiKeySetting = new Setting(containerEl)
+			.setName('Search API Key')
+			.setDesc('API key for your selected search service (not needed for OpenAI)')
+			.addText(text => {
+				text.inputEl.type = 'password';
+				text.inputEl.autocomplete = 'off';
+				return text
+					.setPlaceholder('Enter API key...')
+					.setValue(this.plugin.settings.webAgentSearchApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.webAgentSearchApiKey = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// Hide API key field if OpenAI is selected
+		if (this.plugin.settings.webAgentSearchApi === 'openai') {
+			apiKeySetting.settingEl.style.display = 'none';
+		}
+
+		// Web Agent limits (collapsible)
+		const webAgentLimitsEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const webAgentLimitsSummary = webAgentLimitsEl.createEl('summary');
+		webAgentLimitsSummary.setText('Web Agent Limits');
+
+		const webAgentLimitsContent = webAgentLimitsEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+
+		new Setting(webAgentLimitsContent)
+			.setName('Search Results Limit')
+			.setDesc('Maximum number of search results to retrieve (3-15)')
+			.addSlider(slider => slider
+				.setLimits(3, 15, 1)
+				.setValue(this.plugin.settings.webAgentSnippetLimit)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentSnippetLimit = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(webAgentLimitsContent)
+			.setName('Pages to Fetch')
+			.setDesc('Maximum number of pages to fetch in full (1-5)')
+			.addSlider(slider => slider
+				.setLimits(1, 5, 1)
+				.setValue(this.plugin.settings.webAgentFetchLimit)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentFetchLimit = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(webAgentLimitsContent)
+			.setName('Web Content Token Budget')
+			.setDesc('Maximum tokens for web content (2000-20000)')
+			.addSlider(slider => slider
+				.setLimits(2000, 20000, 1000)
+				.setValue(this.plugin.settings.webAgentTokenBudget)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentTokenBudget = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(webAgentLimitsContent)
+			.setName('Auto Search')
+			.setDesc('Automatically search when vault context seems insufficient (disable to only search when explicitly requested)')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.webAgentAutoSearch)
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentAutoSearch = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Cost estimate display
+		const webCostEl = webAgentLimitsContent.createDiv({ cls: 'ai-settings-expected-tokens' });
+		webCostEl.setText('Typical cost per web search: ~$0.04-0.08 (search API + LLM reasoning + page fetching)');
+
+		// ============================================
+		// SECTION 8: Developer
 		// ============================================
 		containerEl.createEl('h3', { text: 'Developer' });
 

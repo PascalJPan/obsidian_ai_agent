@@ -15,7 +15,14 @@ export const BASE_SYSTEM_PROMPT_ESTIMATE = 2500; // Approximate tokens for full 
 export const MINIMUM_CONTEXT_BUFFER = 500;       // Buffer for response and minimal context
 export const MINIMUM_TOKEN_LIMIT = 3000;         // Minimum allowed token limit setting
 
+// Helper: Get current date string for prompts
+export function getCurrentDateString(): string {
+	const now = new Date();
+	return now.toISOString().split('T')[0]; // YYYY-MM-DD
+}
+
 // Core prompts - hardcoded, not user-editable
+// Note: Use buildCoreEditPrompt() to include current date
 export const CORE_EDIT_PROMPT = `You are an AI Agent for an Obsidian vault. You can edit notes or answer questions.
 
 IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation outside the JSON.
