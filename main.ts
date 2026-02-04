@@ -1607,7 +1607,7 @@ class AIAssistantView extends ItemView {
 	private pendingScoutState: {
 		resumeState: string;
 		userMessage: string;
-		file: TFile;
+		file: TFile | null;
 	} | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: MyPlugin) {
@@ -1775,7 +1775,7 @@ class AIAssistantView extends ItemView {
 			type: 'range',
 			cls: 'ai-assistant-depth-slider'
 		});
-		this.maxNotesSlider.min = '3';
+		this.maxNotesSlider.min = '1';
 		this.maxNotesSlider.max = '50';
 		this.maxNotesSlider.value = this.plugin.settings.agenticMaxNotes.toString();
 		this.scoutMaxNotesLabel = maxNotesRow.createSpan({ cls: 'ai-assistant-slider-value' });
@@ -2849,11 +2849,7 @@ class AIAssistantView extends ItemView {
 			return;
 		}
 
-		const file = this.app.workspace.getActiveFile();
-		if (!file) {
-			new Notice('No active file');
-			return;
-		}
+		const file = this.app.workspace.getActiveFile(); // May be null - handled per-agent
 
 		if (!this.plugin.settings.openaiApiKey) {
 			new Notice('Please set your OpenAI API key in settings');
@@ -2862,8 +2858,8 @@ class AIAssistantView extends ItemView {
 
 		const userMessage = this.taskText.trim();
 
-		// Add user message to chat with active file context
-		this.addMessageToChat('user', userMessage, { activeFile: file.path });
+		// Add user message to chat with active file context (may be undefined)
+		this.addMessageToChat('user', userMessage, { activeFile: file?.path });
 
 		// Clear input
 		if (this.taskTextarea) {
@@ -2900,7 +2896,7 @@ class AIAssistantView extends ItemView {
 			let selectedNotes: NoteSelectionMetadata[] = [];
 
 			if (scout) {
-				// Scout Agent explores the vault
+				// Scout Agent explores the vault (works with or without active file)
 				const scoutResult = await this.runScoutAgentPhase(file, userMessage);
 
 				// Handle ask_user pause state
@@ -2931,28 +2927,34 @@ class AIAssistantView extends ItemView {
 				pipelineContext.tokenAccounting.scoutTokens = scoutResult.tokensUsed || 0;
 			} else {
 				// Manual context selection
-				const tokenLimit = this.plugin.settings.taskAgentTokenLimit;
-				const chatHistoryTokens = this.estimateChatHistoryTokens();
+				if (file) {
+					const tokenLimit = this.plugin.settings.taskAgentTokenLimit;
+					const chatHistoryTokens = this.estimateChatHistoryTokens();
 
-				const contextResult = await this.plugin.buildContextWithTokenLimit(
-					file,
-					userMessage,
-					this.contextScopeConfig,
-					tokenLimit,
-					this.capabilities,
-					this.editableScope,
-					chatHistoryTokens
-				);
-
-				// Show notice if notes were removed
-				if (contextResult.removedNotes.length > 0) {
-					new Notice(
-						`Token limit exceeded. ${contextResult.removedNotes.length} note(s) removed from context.`,
-						5000
+					const contextResult = await this.plugin.buildContextWithTokenLimit(
+						file,
+						userMessage,
+						this.contextScopeConfig,
+						tokenLimit,
+						this.capabilities,
+						this.editableScope,
+						chatHistoryTokens
 					);
-				}
 
-				context = contextResult.context;
+					// Show notice if notes were removed
+					if (contextResult.removedNotes.length > 0) {
+						new Notice(
+							`Token limit exceeded. ${contextResult.removedNotes.length} note(s) removed from context.`,
+							5000
+						);
+					}
+
+					context = contextResult.context;
+				} else {
+					// No active file + no Scout = empty context (web-only or pure AI query)
+					context = '';
+					selectedPaths = [];
+				}
 			}
 
 			// Phase 2: Web Agent (if enabled)
@@ -2987,7 +2989,7 @@ class AIAssistantView extends ItemView {
 				const taskLoadingEl = loadingEl || this.addLoadingIndicator();
 
 				try {
-					await this.handleEditModeWithWebSourcesAndContext(context, file.path, webResult?.sources, pipelineContext, selectedPaths);
+					await this.handleEditModeWithWebSourcesAndContext(context, file?.path, webResult?.sources, pipelineContext, selectedPaths);
 				} finally {
 					if (!loadingEl) this.removeLoadingIndicator(taskLoadingEl);
 				}
@@ -3000,15 +3002,15 @@ class AIAssistantView extends ItemView {
 			console.error('Submit error:', error);
 			this.removeLoadingIndicator(loadingEl);
 			this.removeAgentProgress();
-			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file.path });
+			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file?.path });
 		} finally {
 			this.removeLoadingIndicator(loadingEl);
 			this.setLoading(false);
 		}
 	}
 
-	// Run Scout Agent and return results
-	async runScoutAgentPhase(file: TFile, userMessage: string): Promise<ContextAgentResult> {
+	// Run Scout Agent and return results (file is optional for vault-wide exploration)
+	async runScoutAgentPhase(file: TFile | null, userMessage: string): Promise<ContextAgentResult> {
 		this.createAgentProgressContainer();
 
 		const agenticConfig: AgenticModeConfig = {
@@ -3037,7 +3039,8 @@ class AIAssistantView extends ItemView {
 			listNotesLimit: this.plugin.settings.scoutListNotesLimit
 		};
 
-		const currentContent = await this.app.vault.cachedRead(file);
+		// Get current file content if file exists, otherwise use empty string
+		const currentContent = file ? await this.app.vault.cachedRead(file) : '';
 
 		try {
 			const contextResult = await runContextAgent(
@@ -3514,7 +3517,7 @@ class AIAssistantView extends ItemView {
 	}
 
 	// Handle edit mode with pipeline context and optional web sources
-	async handleEditModeWithWebSourcesAndContext(context: string, activeFilePath: string, webSources?: WebSource[], pipelineContext?: PipelineContext, scoutSelectedPaths?: string[]) {
+	async handleEditModeWithWebSourcesAndContext(context: string, activeFilePath?: string, webSources?: WebSource[], pipelineContext?: PipelineContext, scoutSelectedPaths?: string[]) {
 		// Build agent configuration
 		const agentConfig: TaskAgentConfig = {
 			model: this.plugin.settings.aiModel,
@@ -3765,7 +3768,7 @@ class AIAssistantView extends ItemView {
 				listNotesLimit: this.plugin.settings.scoutListNotesLimit
 			};
 
-			const currentContent = await this.app.vault.cachedRead(file);
+			const currentContent = file ? await this.app.vault.cachedRead(file) : '';
 
 			// Continue the scout agent with user's response
 			const scoutResult = await continueContextAgent(
@@ -3852,20 +3855,20 @@ class AIAssistantView extends ItemView {
 
 				// Use final context for task agent
 				if (this.agentToggles.task) {
-					await this.handleEditModeWithWebSourcesAndContext(finalContext, file.path, webResult?.sources, pipelineContext, scoutResult.selectedPaths);
+					await this.handleEditModeWithWebSourcesAndContext(finalContext, file?.path, webResult?.sources, pipelineContext, scoutResult.selectedPaths);
 				} else {
 					this.displayAgentOnlyResults(scoutResult.selectedPaths, webResult);
 				}
 			} else if (this.agentToggles.task) {
 				// No web agent, but task agent enabled
-				await this.handleEditModeWithWebSourcesAndContext(context, file.path, undefined, pipelineContext, scoutResult.selectedPaths);
+				await this.handleEditModeWithWebSourcesAndContext(context, file?.path, undefined, pipelineContext, scoutResult.selectedPaths);
 			} else {
 				// Only scout ran
 				this.displayAgentOnlyResults(scoutResult.selectedPaths, null);
 			}
 		} catch (error) {
 			console.error('Clarification response error:', error);
-			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file.path });
+			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file?.path });
 		} finally {
 			this.setLoading(false);
 		}
