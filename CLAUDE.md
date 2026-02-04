@@ -77,6 +77,21 @@
   - Handles pending edit blocks and resolution (accept/reject)
   - Manages edit insertion, batch processing, and new file creation
   - Uses dependency injection for vault, logger, and settings access
+- [x] **No active file support** - Pipeline can now run without an active file open:
+  - Scout Agent does vault-wide exploration when no file is open
+  - Web-only queries work with empty context
+  - Task Agent can answer pure AI questions without vault context
+  - All file references made optional (`TFile | null`) throughout pipeline
+- [x] **Last iteration tool restriction** - Scout Agent forced to finalize on last round:
+  - On final iteration, only `update_selection` tool is available
+  - Warning message injected before last round
+  - Prevents wasteful exploration when time is up
+  - Progress shows "(FINAL)" on last round
+- [x] **Scout selection flexibility** - Agent can now select fewer notes:
+  - Minimum `maxNotes` changed from 3 to 1
+  - Current note no longer auto-prepended to selection
+  - System prompt updated: include current note only if relevant
+  - Respects user requests for specific note counts
 
 ## Architecture Overview
 
@@ -295,12 +310,14 @@ An AI agent that explores the vault to find relevant notes for the user's task.
 - Agent calls `update_selection()` after each exploration step
 - Selection includes: selectedPaths, reasoning, confidence ('exploring'|'confident'|'done')
 - If agent sets confidence: 'done', exploration ends early
+- On final iteration: only `update_selection` tool available (forces finalization)
 - On timeout: uses the last selection (never falls back to arbitrary scoring)
+- Current note NOT auto-included - agent decides based on relevance
 - Metadata tracked: semantic scores, keyword match types, link depths per note
 
 **Settings:**
 - `agenticMaxIterations` (2-5, default 3): Max exploration rounds
-- `agenticMaxNotes` (3-20, default 10): Max notes to select
+- `agenticMaxNotes` (1-50, default 10): Max notes to select
 - `agenticKeywordLimit` (3-20, default 10): Max keyword search results
 - `agenticScoutModel`: Model for exploration (default: same as main model)
 

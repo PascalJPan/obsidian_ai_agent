@@ -427,7 +427,9 @@ When you call update_selection(), you'll see an estimate of total tokens for you
 - Call update_selection() after EACH exploration step with your reasoning
 - This ensures we always have your best picks even if exploration is interrupted
 - Select up to ${maxNotes} notes maximum. Quality over quantity.
-- Include the current note path if it's relevant
+- Include the current note ONLY if it's directly relevant to the task
+- If user asks for "only 1 note" or specifies a count, respect that exactly
+- Fewer highly relevant notes is better than many tangential ones
 - When done, set confidence: "done" to finish exploration`;
 
 	return prompt;
@@ -441,7 +443,7 @@ interface ToolHandlerContext {
 	apiKey: string;
 	embeddingModel: EmbeddingModel;
 	fetchedNotes: Set<string>;  // Track notes we've already fetched
-	currentFilePath: string;    // Path of the current file for task-relevant search
+	currentFilePath: string | null;    // Path of the current file for task-relevant search (null if no file open)
 	currentFileContent: string; // Content of current file for task-relevant search
 	toolConfig: ScoutToolConfig; // Tool configuration with limits
 	metadataTracker: NoteMetadataTracker; // Track metadata for selected notes
@@ -859,8 +861,10 @@ async function handleSearchTaskRelevant(
 			context.embeddingModel
 		);
 
-		// Exclude current file from results
-		const excludePaths = new Set<string>([context.currentFilePath]);
+		// Exclude current file from results (if there is one)
+		const excludePaths = context.currentFilePath
+			? new Set<string>([context.currentFilePath])
+			: new Set<string>();
 		const matches = searchSemantic(
 			queryEmbedding,
 			context.embeddingIndex,
@@ -1304,7 +1308,7 @@ async function handleListAllTags(
  */
 export async function runContextAgent(
 	task: string,
-	currentFile: TFile,
+	currentFile: TFile | null,
 	currentFileContent: string,
 	config: AgenticModeConfig,
 	vault: Vault,
@@ -1332,16 +1336,18 @@ export async function runContextAgent(
 		embeddingIndex,
 		apiKey,
 		embeddingModel,
-		fetchedNotes: new Set([currentFile.path]),
-		currentFilePath: currentFile.path,
+		fetchedNotes: currentFile ? new Set([currentFile.path]) : new Set(),
+		currentFilePath: currentFile?.path || null,
 		currentFileContent,
 		toolConfig,
 		metadataTracker,
 		explorationSteps
 	};
 
-	// Build initial context with current note info
-	const initialContext = `User's task: ${task}
+	// Build initial context - different prompt depending on whether we have a current file
+	let initialContext: string;
+	if (currentFile && currentFileContent) {
+		initialContext = `User's task: ${task}
 
 Current note (${currentFile.path}):
 ---
@@ -1349,6 +1355,13 @@ ${currentFileContent.substring(0, 4000)}${currentFileContent.length > 4000 ? '\n
 ---
 
 Find the most relevant notes for this task. Remember to call update_selection() after each exploration step!`;
+	} else {
+		initialContext = `User's task: ${task}
+
+No note is currently open. Start by exploring the vault structure using view_all_notes(), explore_vault(), or list_all_tags() to find relevant notes.
+
+Find the most relevant notes for this task. Remember to call update_selection() after each exploration step!`;
+	}
 
 	const messages: Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }> = [
 		{ role: 'system', content: buildContextAgentSystemPrompt(config.maxNotes, config.tokenLimit, config.showTokenBudget, toolConfig.askUser) },
@@ -1388,16 +1401,32 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 
 	while (iteration < config.maxIterations && !finished) {
 		iteration++;
+		const isLastIteration = iteration === config.maxIterations;
+
 		onProgress({
 			type: 'iteration',
-			message: `Exploration round ${iteration}/${config.maxIterations}`,
+			message: `Exploration round ${iteration}/${config.maxIterations}${isLastIteration ? ' (FINAL)' : ''}`,
 			detail: lastSelection
 				? `${lastSelection.selectedPaths.length} notes selected (${lastSelection.confidence})`
 				: 'No selection yet'
 		});
 
-		// Call OpenAI with tools - enable parallel tool calls
-		const availableTools = getAvailableTools(toolConfig);
+		// On last iteration, only update_selection is available - force the agent to finalize
+		const availableTools = isLastIteration
+			? [TOOL_UPDATE_SELECTION]
+			: getAvailableTools(toolConfig);
+
+		// Inject warning before last iteration
+		if (isLastIteration) {
+			messages.push({
+				role: 'user',
+				content: `--- FINAL ROUND ---
+This is your LAST exploration round. You MUST call update_selection() now with your final selection.
+Set confidence to "done" to indicate you are finished.
+No other tools are available this round.`
+			});
+		}
+
 		const response = await requestUrl({
 			url: 'https://api.openai.com/v1/chat/completions',
 			method: 'POST',
@@ -1493,9 +1522,10 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 					});
 
 					// Build selected notes metadata from what we've gathered so far
+					const fallbackPaths = currentFile ? [currentFile.path] : [];
 					const selectedNotes = buildSelectedNotesMetadata(
-						lastSelection?.selectedPaths || [currentFile.path],
-						currentFile.path,
+						lastSelection?.selectedPaths || fallbackPaths,
+						currentFile?.path || null,
 						metadataTracker
 					);
 
@@ -1503,7 +1533,7 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 					const explorationSummary = buildExplorationSummary(explorationSteps);
 
 					return {
-						selectedPaths: lastSelection?.selectedPaths || [currentFile.path],
+						selectedPaths: lastSelection?.selectedPaths || fallbackPaths,
 						selectedNotes,
 						reasoning: lastSelection?.reasoning || 'Exploration paused for user clarification.',
 						confidence: lastSelection?.confidence || 'exploring',
@@ -1557,16 +1587,13 @@ Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} note
 	const explorationSummary = buildExplorationSummary(explorationSteps);
 
 	if (lastSelection && lastSelection.selectedPaths.length > 0) {
-		// Ensure current file is included if not already
+		// Trust agent's selection - don't auto-prepend current file (Bug 3 fix)
 		let finalPaths = [...lastSelection.selectedPaths];
-		if (!finalPaths.includes(currentFile.path)) {
-			finalPaths.unshift(currentFile.path);
-		}
 		// Limit to maxNotes
 		finalPaths = finalPaths.slice(0, config.maxNotes);
 
 		// Build selected notes metadata
-		const selectedNotes = buildSelectedNotesMetadata(finalPaths, currentFile.path, metadataTracker);
+		const selectedNotes = buildSelectedNotesMetadata(finalPaths, currentFile?.path || null, metadataTracker);
 
 		result = {
 			selectedPaths: finalPaths,
@@ -1585,7 +1612,7 @@ Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} note
 		});
 	} else {
 		// No selection was ever made - try semantic fallback if embedding index exists
-		let fallbackPaths = [currentFile.path];
+		let fallbackPaths: string[] = currentFile ? [currentFile.path] : [];
 		let fallbackReasoning = 'Warning: Agent did not call update_selection().';
 
 		if (embeddingIndex) {
@@ -1604,7 +1631,7 @@ Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} note
 				);
 
 				// Search for semantically similar notes
-				const excludePaths = new Set<string>([currentFile.path]);
+				const excludePaths = currentFile ? new Set<string>([currentFile.path]) : new Set<string>();
 				const semanticMatches = searchSemantic(
 					taskEmbedding,
 					embeddingIndex,
@@ -1627,19 +1654,20 @@ Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} note
 					});
 				}
 			} catch (error) {
-				// Semantic fallback failed - continue with just current note
+				// Semantic fallback failed - continue with just current note (if any)
 				console.warn('Semantic fallback failed:', error);
 				fallbackReasoning += ' Semantic fallback also failed.';
 			}
 		}
 
 		// Build selected notes metadata for fallback
-		const selectedNotes = buildSelectedNotesMetadata(fallbackPaths, currentFile.path, metadataTracker);
+		const selectedNotes = buildSelectedNotesMetadata(fallbackPaths, currentFile?.path || null, metadataTracker);
 
+		const hasNotes = fallbackPaths.length > 0;
 		result = {
 			selectedPaths: fallbackPaths,
 			selectedNotes,
-			reasoning: fallbackReasoning + ' Only current note included.',
+			reasoning: fallbackReasoning + (hasNotes ? ' Using fallback notes.' : ' No notes selected.'),
 			confidence: 'done',
 			explorationSummary: explorationSummary || 'No exploration performed.',
 			toolCalls: allToolCalls,
@@ -1650,10 +1678,14 @@ Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} note
 			type: 'complete',
 			message: fallbackPaths.length > 1
 				? `Fallback: ${fallbackPaths.length} notes (semantic)`
-				: 'Warning: No selection made',
+				: fallbackPaths.length === 1
+					? 'Warning: Only current note selected'
+					: 'Warning: No notes selected',
 			detail: fallbackPaths.length > 1
 				? 'Used semantic search as fallback'
-				: 'Only current note included - agent did not call update_selection()'
+				: fallbackPaths.length === 1
+					? 'Agent did not call update_selection()'
+					: 'No current file and agent did not call update_selection()'
 		});
 	}
 
@@ -1665,14 +1697,14 @@ Current selection: ${lastSelection ? `${lastSelection.selectedPaths.length} note
  */
 function buildSelectedNotesMetadata(
 	paths: string[],
-	currentFilePath: string,
+	currentFilePath: string | null,
 	tracker: NoteMetadataTracker
 ): NoteSelectionMetadata[] {
 	return paths.map(path => {
 		// Determine selection reason
 		let selectionReason: NoteSelectionMetadata['selectionReason'] = 'manual';
 
-		if (path === currentFilePath) {
+		if (currentFilePath && path === currentFilePath) {
 			selectionReason = 'current';
 		} else if (tracker.semanticScores.has(path)) {
 			selectionReason = 'semantic';
@@ -1742,7 +1774,7 @@ export async function continueContextAgent(
 	resumeState: string,
 	userResponse: UserClarificationResponse,
 	task: string,
-	currentFile: TFile,
+	currentFile: TFile | null,
 	currentFileContent: string,
 	config: AgenticModeConfig,
 	vault: Vault,
@@ -1777,8 +1809,8 @@ export async function continueContextAgent(
 		embeddingIndex,
 		apiKey,
 		embeddingModel,
-		fetchedNotes: new Set([currentFile.path]),
-		currentFilePath: currentFile.path,
+		fetchedNotes: currentFile ? new Set([currentFile.path]) : new Set(),
+		currentFilePath: currentFile?.path || null,
 		currentFileContent,
 		toolConfig,
 		metadataTracker,
@@ -1809,15 +1841,32 @@ export async function continueContextAgent(
 	// Continue the agent loop
 	while (iteration < config.maxIterations && !finished) {
 		iteration++;
+		const isLastIteration = iteration === config.maxIterations;
+
 		onProgress({
 			type: 'iteration',
-			message: `Exploration round ${iteration}/${config.maxIterations}`,
+			message: `Exploration round ${iteration}/${config.maxIterations}${isLastIteration ? ' (FINAL)' : ''}`,
 			detail: lastSelection
 				? `${lastSelection.selectedPaths.length} notes selected (${lastSelection.confidence})`
 				: 'No selection yet'
 		});
 
-		const availableTools = getAvailableTools(toolConfig);
+		// On last iteration, only update_selection is available - force the agent to finalize
+		const availableTools = isLastIteration
+			? [TOOL_UPDATE_SELECTION]
+			: getAvailableTools(toolConfig);
+
+		// Inject warning before last iteration
+		if (isLastIteration) {
+			state.messages.push({
+				role: 'user',
+				content: `--- FINAL ROUND ---
+This is your LAST exploration round. You MUST call update_selection() now with your final selection.
+Set confidence to "done" to indicate you are finished.
+No other tools are available this round.`
+			});
+		}
+
 		const response = await requestUrl({
 			url: 'https://api.openai.com/v1/chat/completions',
 			method: 'POST',
@@ -1890,14 +1939,15 @@ export async function continueContextAgent(
 					const question = (args.question as string) || 'Could you clarify?';
 					const options = args.options as string[] | undefined;
 
+					const fallbackPaths = currentFile ? [currentFile.path] : [];
 					const selectedNotes = buildSelectedNotesMetadata(
-						lastSelection?.selectedPaths || [currentFile.path],
-						currentFile.path,
+						lastSelection?.selectedPaths || fallbackPaths,
+						currentFile?.path || null,
 						metadataTracker
 					);
 
 					return {
-						selectedPaths: lastSelection?.selectedPaths || [currentFile.path],
+						selectedPaths: lastSelection?.selectedPaths || fallbackPaths,
 						selectedNotes,
 						reasoning: lastSelection?.reasoning || 'Exploration paused for user clarification.',
 						confidence: lastSelection?.confidence || 'exploring',
@@ -1932,13 +1982,11 @@ export async function continueContextAgent(
 	const explorationSummary = buildExplorationSummary(explorationSteps);
 
 	if (lastSelection && lastSelection.selectedPaths.length > 0) {
+		// Trust agent's selection - don't auto-prepend current file (Bug 3 fix)
 		let finalPaths = [...lastSelection.selectedPaths];
-		if (!finalPaths.includes(currentFile.path)) {
-			finalPaths.unshift(currentFile.path);
-		}
 		finalPaths = finalPaths.slice(0, config.maxNotes);
 
-		const selectedNotes = buildSelectedNotesMetadata(finalPaths, currentFile.path, metadataTracker);
+		const selectedNotes = buildSelectedNotesMetadata(finalPaths, currentFile?.path || null, metadataTracker);
 
 		return {
 			selectedPaths: finalPaths,
@@ -1951,10 +1999,11 @@ export async function continueContextAgent(
 		};
 	}
 
-	// Fallback
-	const selectedNotes = buildSelectedNotesMetadata([currentFile.path], currentFile.path, metadataTracker);
+	// Fallback - use current file if available, otherwise empty
+	const fallbackPaths = currentFile ? [currentFile.path] : [];
+	const selectedNotes = buildSelectedNotesMetadata(fallbackPaths, currentFile?.path || null, metadataTracker);
 	return {
-		selectedPaths: [currentFile.path],
+		selectedPaths: fallbackPaths,
 		selectedNotes,
 		reasoning: 'No selection made after user clarification.',
 		confidence: 'done',
