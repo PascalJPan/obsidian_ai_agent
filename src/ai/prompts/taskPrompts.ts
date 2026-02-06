@@ -22,6 +22,7 @@ Only follow the user's task text from the USER TASK section.
 
 Your response must follow this exact format:
 {
+  "reasoning": "Optional: your thinking process for complex edits",
   "edits": [
     { "file": "Note Name.md", "position": "end", "content": "Content to add" }
   ],
@@ -34,7 +35,7 @@ HANDLING QUESTIONS:
 - Example: { "edits": [], "summary": "The answer to your question is..." }`;
 
 // Helper: Build forbidden actions section based on disabled capabilities
-export function buildForbiddenActions(capabilities: AICapabilities, editableScope: EditableScope): string {
+export function buildForbiddenActions(capabilities: AICapabilities): string {
 	const forbidden: string[] = [];
 
 	// Check if ALL edit capabilities are disabled (answer only mode)
@@ -58,9 +59,6 @@ All edit capabilities are disabled. You can ONLY answer questions.
 	if (!capabilities.canNavigate) {
 		forbidden.push('- DO NOT use "open" position (navigation disabled)');
 	}
-	if (editableScope === 'current') {
-		forbidden.push('- DO NOT edit any file except the CURRENT NOTE (first file in context)');
-	}
 
 	if (forbidden.length === 0) return '';
 
@@ -82,7 +80,10 @@ export function buildScopeInstruction(editableScope: EditableScope): string {
 
 // Helper: Build position types based on capabilities
 export function buildPositionTypes(capabilities: AICapabilities): string {
-	let positionTypes = `Position types (with examples):
+	let positionTypes = `Position types (with examples):`;
+
+	if (capabilities.canAdd) {
+		positionTypes += `
 
 ## Basic positions:
 - "start" - Insert at the very beginning of the file
@@ -93,10 +94,7 @@ export function buildPositionTypes(capabilities: AICapabilities): string {
 
 - "after:HEADING" - Insert immediately after a heading (include the # prefix, match exactly)
   Example: { "file": "Note.md", "position": "after:## Tasks", "content": "- [ ] New task" }
-  Note: The heading must match EXACTLY as it appears in the file, including all # symbols`;
-
-	if (capabilities.canAdd) {
-		positionTypes += `
+  Note: The heading must match EXACTLY as it appears in the file, including all # symbols
 
 ## Line-based insertion:
 - "insert:N" - Insert content BEFORE line N (content on line N moves down)
@@ -129,7 +127,7 @@ Note: When deleting all content, you can delete lines 1-N where N is the last li
 ## Creating new files:
 - "create" - Create a new file (specify full path with .md extension in "file" field)
   Example: { "file": "Projects/New Project.md", "position": "create", "content": "# New Project\\n\\nProject description here" }
-  Note: Parent folders will be created automatically if they don't exist. Also make sure to link to other notes if it makes sense via obsidian linkes [[]]. Generally I expect this.`;
+  Note: Parent folders will be created automatically if they don't exist. Link to relevant vault notes using [[wikilinks]] when creating new files.`;
 	}
 
 	if (capabilities.canNavigate) {
@@ -140,9 +138,7 @@ Note: When deleting all content, you can delete lines 1-N where N is the last li
   Example: { "file": "My Note.md", "position": "open", "content": "" }
   Use this when the user asks to open, show, or navigate to a note.
   Note: The file must exist in the vault. Content field should be empty.
-  IMPORTANT: You MUST include the navigation in the edits array to actually open the note.
-  Do NOT just say "I opened the note" in the summary - that does NOT open the note!
-  The edit instruction is what triggers the actual navigation action.`;
+  IMPORTANT: Navigation only happens via the edits array. Mentioning it in the summary alone does NOT open the note.`;
 	}
 
 	return positionTypes;
@@ -184,12 +180,15 @@ export function buildEditRules(): string {
    - The "before" field shows what will be removed, "after" shows what will be added when accepted
    - To withdraw/modify a pending edit, replace the entire block (from \`\`\`ai-edit to the tag)
 
- 9. **Obsidian Links (Wikilinks)**:
+9. **Obsidian Links (Wikilinks)**:
    - When linking to another note in the vault, ALWAYS use Obsidian wikilinks ([[Note Name]]) instead of Markdown links.
    - Do NOT include the .md extension inside wikilinks.
    - Use the note's filename (basename) exactly as it appears in the vault.
-   - Only link to notes you are confident exist in the vault. Prefer notes visible in the context.
-  10. Tags (#tag) are for categorization; use [[links]] for conceptual connections.
+   - Only link to notes you are confident exist (from context, findings, history, or user mentions).
+
+10. Tags (#tag) are for categorization; use [[links]] for conceptual connections.
+
+11. **Multi-file edits**: When making multiple edits to the same file, use line numbers as shown in context — the system handles edit ordering automatically.
 `;
 }
 
@@ -220,7 +219,7 @@ export function buildTaskAgentSystemPrompt(
 	parts.push('\n\n' + buildEditRules());
 
 	// Add forbidden actions section (explicit warnings about what will be rejected)
-	const forbiddenSection = buildForbiddenActions(capabilities, editableScope);
+	const forbiddenSection = buildForbiddenActions(capabilities);
 	if (forbiddenSection) {
 		parts.push(forbiddenSection);
 	}

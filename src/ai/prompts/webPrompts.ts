@@ -153,9 +153,8 @@ Skip evaluation - proceed directly to web_search(). Do NOT call evaluate_context
    - Include version numbers, dates, or specific terms when relevant
 
 2. After getting results, call select_pages() to choose which to fetch in full.
-   - Prefer official documentation, reputable tech sites
-   - Select at least ${config.minFetchPages} page${config.minFetchPages > 1 ? 's' : ''} (minimum enforcement)
-   - Max ${config.fetchLimit} pages (you have ${config.tokenBudget} tokens budget)
+   - Prefer authoritative sources; for niche topics, forums and blogs are acceptable
+   - See LIMITS section for min/max pages and token budget
 
 3. Finally, call finalize_web_context() with compiled findings.
    - Be concise but include all relevant information
@@ -175,9 +174,8 @@ Skip evaluation - proceed directly to web_search(). Do NOT call evaluate_context
    - Include version numbers, dates, or specific terms when relevant
 
 3. After getting results, call select_pages() to choose which to fetch in full.
-   - Prefer official documentation, reputable tech sites
-   - Select at least ${config.minFetchPages} page${config.minFetchPages > 1 ? 's' : ''} (minimum enforcement)
-   - Max ${config.fetchLimit} pages (you have ${config.tokenBudget} tokens budget)
+   - Prefer authoritative sources; for niche topics, forums and blogs are acceptable
+   - See LIMITS section for min/max pages and token budget
 
 4. Finally, call finalize_web_context() with compiled findings.
    - Be concise but include all relevant information
@@ -199,7 +197,7 @@ If a search yields fewer than 3 results, you may try a different query formulati
 
 ## IMPORTANT
 ${autoSearchMode ? '' : '- If vault context is sufficient, call evaluate_context with sufficient=true and you\'re done\n'}- Don't fabricate information - only use what you find
-- If search fails, report the error and continue without web context`;
+- If search fails, call finalize_web_context() explaining the failure in webContext with an empty sources array`;
 
 	return prompt;
 }

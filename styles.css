@@ -125,6 +125,37 @@
 	border-bottom-left-radius: 4px;
 }
 
+/* Clickable internal links and tags in chat */
+.ai-chat-bubble a.internal-link,
+.ai-chat-bubble a.tag {
+	cursor: pointer;
+}
+
+.ai-chat-bubble a.internal-link {
+	color: var(--link-color);
+	text-decoration-line: underline;
+	text-decoration-style: solid;
+	text-underline-offset: 2px;
+}
+
+.ai-chat-bubble a.internal-link:hover {
+	color: var(--link-color-hover, var(--link-color));
+	text-decoration-color: var(--link-color-hover, var(--link-color));
+}
+
+.ai-chat-bubble a.tag {
+	color: var(--tag-color);
+	background: var(--tag-background);
+	padding: 1px 6px;
+	border-radius: 8px;
+	font-size: 0.9em;
+}
+
+.ai-chat-bubble a.tag:hover {
+	color: var(--tag-color-hover, var(--tag-color));
+	background: var(--tag-background-hover, var(--tag-background));
+}
+
 /* Markdown in assistant messages */
 .ai-chat-message-assistant .ai-chat-bubble p {
 	margin: 0 0 8px 0;

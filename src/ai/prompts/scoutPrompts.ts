@@ -125,7 +125,7 @@ export const TOOL_SEARCH_SEMANTIC: OpenAITool = {
 	type: 'function' as const,
 	function: {
 		name: 'search_semantic',
-		description: 'Search for notes semantically similar to a query. Best for finding conceptually related notes when you don\'t know exact keywords.',
+		description: 'Search for notes similar to a custom query. Best for exploring general concepts or topics.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -147,7 +147,7 @@ export const TOOL_SEARCH_TASK_RELEVANT: OpenAITool = {
 	type: 'function' as const,
 	function: {
 		name: 'search_task_relevant',
-		description: 'Search for notes relevant to accomplishing a specific task. Combines task context with semantic search for better results.',
+		description: 'Search for notes relevant to a task goal. Combines task + current note context for better matching. Use as your default semantic search.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -370,19 +370,12 @@ Don't over-explore. If you have what is necessary, finish immediately.
 ## WORKFLOW
 1. Analyze the task - is it simple or complex?
 2. Explore using tools (call multiple tools per turn for efficiency)
-3. After EACH exploration step, call update_selection() with your current best picks
+3. Save progress after each step (see CRITICAL RULES)
 4. When confident you have enough context, set confidence: "done"
 
-## AVAILABLE SEARCH STRATEGIES
-- search_keyword("term") - Fast exact search, prioritizes title > heading > content matches
-- search_semantic("concept") - Find conceptually related notes via embeddings
-- search_task_relevant("do X with Y") - Task-focused semantic search
-- get_links_recursive(path, depth=2) - Get all notes within N hops of a note
-
-## EXPLORATION TIPS
-- Start with keyword search for specific terms, semantic for concepts
-- For promising results, check THEIR links (multi-hop exploration)
-- You can call tools on ANY note path, not just the current one
+## SEARCH TIPS
+- Specific terms → search_keyword; concepts → search_task_relevant (default) or search_semantic
+- Follow promising results with get_links or get_links_recursive for multi-hop exploration
 - Call multiple tools in parallel to explore efficiently
 
 ## MULTI-HOP EXAMPLE
@@ -392,9 +385,8 @@ Don't over-explore. If you have what is necessary, finish immediately.
 
 ## WHEN TO FETCH vs JUST SELECT
 - For CLEAR-CUT tasks ("all notes with tag X", "notes in folder Y", "linked notes"), just select and finalize - no need to fetch
-- For UNCERTAIN selections (semantic matches, keyword results), fetch_note() a few top picks to verify relevance
-- Use your judgment: if titles/paths clearly match the task, fetching is optional
-- Fetching is most useful when you're unsure if a note's content actually relates to the task`;
+- If note titles clearly match the task, selecting without fetch is fine
+- For semantic matches you're unsure about, verify with fetch_note()`;
 
 	// Add record_finding guidance
 	prompt += `
@@ -425,7 +417,8 @@ Keep questions concise with clear options when possible.`;
 
 ## TOKEN BUDGET
 Your selections have a ${tokenLimit.toLocaleString()} token budget. Prioritize concise, highly relevant notes.
-When you call update_selection(), you'll see an estimate of total tokens for your selection.`;
+When you call update_selection(), you'll see an estimate of total tokens for your selection.
+Notes exceeding the budget will be automatically removed, lowest priority first.`;
 	}
 
 	prompt += `
@@ -433,8 +426,8 @@ When you call update_selection(), you'll see an estimate of total tokens for you
 ## CRITICAL RULES
 - Call update_selection() after EACH exploration step with your reasoning
 - This ensures we always have your best picks even if exploration is interrupted
-- Select up to ${maxNotes} notes maximum. Quality over quantity.
-- Include the current note ONLY if it's directly relevant to the task
+- Select up to ${maxNotes} notes maximum. Exclude notes only tangentially related to the task.
+- Include the current note ONLY if it's relevant to the task
 - If user asks for "only 1 note" or specifies a count, respect that exactly
 - Fewer highly relevant notes is better than many tangential ones
 - If the task is a question about vault structure (tags, folders, statistics), use record_finding() to capture the answer data
@@ -465,10 +458,8 @@ Find the most relevant notes for this task. Remember to call update_selection() 
 
 // Message template: Final round warning injected before the last iteration
 export const SCOUT_FINAL_ROUND_WARNING = `--- FINAL ROUND ---
-This is your LAST exploration round. You MUST call update_selection() this round to finalize your selection.
-Set confidence to "done" to indicate you are finished.
-You may also call record_finding() if you have data to pass to the Task Agent.
-You still have access to all tools, but you MUST call update_selection() this round to finalize.`;
+This is your LAST exploration round. You MUST call update_selection() with confidence: "done".
+You may also call record_finding() if needed, but exploration is over.`;
 
 // Message template: Exploration status injected between rounds
 export function buildExplorationStatusMessage(iteration: number, maxIterations: number, selectionCount: number | null): string {
