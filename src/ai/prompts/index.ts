@@ -35,6 +35,14 @@ export const SCOUT_FINDINGS_FOOTER = '=== END SCOUT FINDINGS ===';
 /**
  * Build the scout findings block for context injection
  */
+/**
+ * Sanitize finding data to prevent delimiter spoofing / prompt injection.
+ * Replaces any lines that start with "===" (our delimiter pattern) with an escaped version.
+ */
+function sanitizeFindingData(data: string): string {
+	return data.replace(/^(===)/gm, '\\$1');
+}
+
 export function buildScoutFindingsBlock(findings: ScoutFinding[]): string {
 	if (!findings || findings.length === 0) return '';
 
@@ -42,7 +50,7 @@ export function buildScoutFindingsBlock(findings: ScoutFinding[]): string {
 	parts.push(SCOUT_FINDINGS_HEADER);
 	for (const finding of findings) {
 		parts.push(`--- FINDING: ${finding.label} ---`);
-		parts.push(finding.data);
+		parts.push(sanitizeFindingData(finding.data));
 		parts.push('--- END FINDING ---');
 	}
 	parts.push(SCOUT_FINDINGS_FOOTER);

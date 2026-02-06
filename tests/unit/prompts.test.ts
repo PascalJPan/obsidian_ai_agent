@@ -27,40 +27,34 @@ describe('buildForbiddenActions', () => {
 		canNavigate: false
 	};
 
-	it('returns empty string when all capabilities enabled and scope is not current', () => {
-		const result = buildForbiddenActions(allCapabilities, 'linked');
+	it('returns empty string when all capabilities enabled', () => {
+		const result = buildForbiddenActions(allCapabilities);
 		expect(result).toBe('');
 	});
 
 	it('includes warning for disabled canAdd', () => {
 		const caps: AICapabilities = { ...allCapabilities, canAdd: false };
-		const result = buildForbiddenActions(caps, 'context');
+		const result = buildForbiddenActions(caps);
 		expect(result).toContain('FORBIDDEN ACTIONS');
 		expect(result).toContain('DO NOT use "start", "end", "after:", or "insert:"');
 	});
 
 	it('includes warning for disabled canDelete', () => {
 		const caps: AICapabilities = { ...allCapabilities, canDelete: false };
-		const result = buildForbiddenActions(caps, 'context');
+		const result = buildForbiddenActions(caps);
 		expect(result).toContain('FORBIDDEN ACTIONS');
 		expect(result).toContain('DO NOT use "delete:" or "replace:"');
 	});
 
 	it('includes warning for disabled canCreate', () => {
 		const caps: AICapabilities = { ...allCapabilities, canCreate: false };
-		const result = buildForbiddenActions(caps, 'context');
+		const result = buildForbiddenActions(caps);
 		expect(result).toContain('FORBIDDEN ACTIONS');
 		expect(result).toContain('DO NOT use "create"');
 	});
 
-	it('includes warning for current scope', () => {
-		const result = buildForbiddenActions(allCapabilities, 'current');
-		expect(result).toContain('FORBIDDEN ACTIONS');
-		expect(result).toContain('DO NOT edit any file except the CURRENT NOTE');
-	});
-
 	it('returns ANSWER ONLY MODE when all capabilities disabled', () => {
-		const result = buildForbiddenActions(noCapabilities, 'current');
+		const result = buildForbiddenActions(noCapabilities);
 		expect(result).toContain('ANSWER ONLY MODE');
 		expect(result).toContain('All edit capabilities are disabled');
 		expect(result).toContain('ONLY answer questions');
@@ -95,23 +89,21 @@ describe('buildPositionTypes', () => {
 		canCreate: true
 	};
 
-	it('always includes basic positions', () => {
-		const caps: AICapabilities = { canAdd: false, canDelete: false, canCreate: false };
+	it('includes basic positions and insert when canAdd is true', () => {
+		const caps: AICapabilities = { canAdd: true, canDelete: false, canCreate: false };
 		const result = buildPositionTypes(caps);
 		expect(result).toContain('"start"');
 		expect(result).toContain('"end"');
 		expect(result).toContain('"after:HEADING"');
-	});
-
-	it('includes insert when canAdd is true', () => {
-		const caps: AICapabilities = { canAdd: true, canDelete: false, canCreate: false };
-		const result = buildPositionTypes(caps);
 		expect(result).toContain('"insert:N"');
 	});
 
-	it('does not include insert when canAdd is false', () => {
+	it('does not include basic positions or insert when canAdd is false', () => {
 		const caps: AICapabilities = { canAdd: false, canDelete: true, canCreate: true };
 		const result = buildPositionTypes(caps);
+		expect(result).not.toContain('"start"');
+		expect(result).not.toContain('"end"');
+		expect(result).not.toContain('"after:HEADING"');
 		expect(result).not.toContain('Line-based insertion');
 	});
 

@@ -66,11 +66,6 @@ import {
 	saveEmbeddingIndex
 } from './src/ai/semantic';
 import {
-	CORE_EDIT_PROMPT,
-	buildForbiddenActions,
-	buildScopeInstruction,
-	buildPositionTypes,
-	buildEditRules,
 	MINIMUM_TOKEN_LIMIT,
 	buildTaskAgentSystemPrompt,
 	buildMessagesFromHistory,
@@ -1637,6 +1632,29 @@ class AIAssistantView extends ItemView {
 		// Chat container (takes up most space, scrollable)
 		this.chatContainer = container.createDiv({ cls: 'ai-chat-container' });
 
+		// Delegated click handler for internal links and tags in chat
+		this.registerDomEvent(this.chatContainer, 'click', (evt: MouseEvent) => {
+			const target = evt.target as HTMLElement;
+			const link = target.closest('a.internal-link') as HTMLAnchorElement | null;
+			if (link) {
+				evt.preventDefault();
+				const href = link.getAttr('href') || link.dataset.href || link.textContent || '';
+				if (href) {
+					this.app.workspace.openLinkText(href, this.getSourcePath(), true);
+				}
+				return;
+			}
+			const tag = target.closest('a.tag') as HTMLAnchorElement | null;
+			if (tag) {
+				evt.preventDefault();
+				const tagText = tag.textContent?.replace(/^#/, '') || '';
+				if (tagText) {
+					this.plugin.openSearchWithQuery(`tag:#${tagText}`);
+				}
+				return;
+			}
+		});
+
 		// Welcome message
 		this.welcomeMessage = this.chatContainer.createDiv({ cls: 'ai-chat-welcome' });
 		this.welcomeMessage.setText('Ask a question or request edits to your notes.');
@@ -2332,7 +2350,7 @@ class AIAssistantView extends ItemView {
 				const findingItem = findingsContent.createDiv({ cls: 'ai-agent-finding-item' });
 				findingItem.createEl('strong', { text: finding.label });
 				const findingData = findingItem.createDiv({ cls: 'ai-agent-finding-data' });
-				MarkdownRenderer.render(this.app, finding.data, findingData, '', this);
+				MarkdownRenderer.render(this.app, finding.data, findingData, this.getSourcePath(), this);
 			}
 		}
 
@@ -2602,6 +2620,10 @@ class AIAssistantView extends ItemView {
 		}
 	}
 
+	private getSourcePath(): string {
+		return this.app.workspace.getActiveFile()?.path || this.lastActiveFilePath || '';
+	}
+
 	generateMessageId(): string {
 		return Date.now().toString(36) + Math.random().toString(36).substring(2);
 	}
@@ -2665,7 +2687,7 @@ class AIAssistantView extends ItemView {
 				this.app,
 				message.content,
 				bubbleEl,
-				'',
+				this.getSourcePath(),
 				this
 			);
 
