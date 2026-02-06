@@ -538,6 +538,22 @@
 	font-weight: 500;
 }
 
+/* Disabled state for sliders */
+.ai-assistant-depth-slider:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+/* Disabled state for agent toggle buttons */
+.ai-agent-toggle-btn:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+
+.ai-agent-toggle-btn:disabled:hover {
+	opacity: 0.35;
+}
+
 /* Disabled send button state */
 .ai-assistant-submit-arrow.disabled {
 	opacity: 0.4;
@@ -1462,9 +1478,6 @@ button:disabled {
 	font-size: 0.85em;
 	color: var(--text-muted);
 	user-select: none;
-	display: flex;
-	align-items: center;
-	gap: 8px;
 }
 
 .ai-agent-notes-toggle summary:hover {
@@ -1484,7 +1497,8 @@ button:disabled {
 	justify-content: center;
 	opacity: 0.6;
 	transition: opacity 0.15s, background 0.15s, color 0.15s;
-	margin-left: auto;
+	margin-left: 8px;
+	vertical-align: middle;
 }
 
 .ai-agent-copy-btn:hover {
@@ -1545,6 +1559,46 @@ button:disabled {
 .ai-agent-note-link svg {
 	width: 14px;
 	height: 14px;
+}
+
+/* Findings toggle */
+.ai-agent-findings-toggle {
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-agent-findings-toggle summary {
+	cursor: pointer;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	user-select: none;
+}
+
+.ai-agent-findings-toggle summary:hover {
+	color: var(--text-normal);
+}
+
+.ai-agent-findings-toggle[open] summary {
+	margin-bottom: 8px;
+}
+
+.ai-agent-findings-content {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	padding: 8px 10px;
+	background: var(--background-primary);
+	border-radius: 4px;
+}
+
+.ai-agent-finding-item {
+	margin-bottom: 6px;
+}
+
+.ai-agent-finding-data {
+	white-space: pre-wrap;
+	margin-top: 4px;
+	line-height: 1.5;
 }
 
 /* Reasoning toggle */

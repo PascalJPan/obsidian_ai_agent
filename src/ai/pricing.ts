@@ -39,12 +39,20 @@ export function calculateCost(usage: TokenUsage, model: string): number {
 /**
  * Format token usage for display
  * Example: "1,234 in + 567 out · ~$0.0025"
+ * If model pricing is unknown, omits cost instead of showing $0.0000
  */
 export function formatTokenUsage(usage: TokenUsage, model: string): string {
+	const pricing = MODEL_PRICING[model];
+	const tokenStr = `${usage.promptTokens.toLocaleString()} in + ${usage.completionTokens.toLocaleString()} out`;
+
+	if (!pricing) {
+		return tokenStr;
+	}
+
 	const cost = calculateCost(usage, model);
 	const costStr = cost < 0.01
 		? `$${cost.toFixed(4)}`
 		: `$${cost.toFixed(2)}`;
 
-	return `${usage.promptTokens.toLocaleString()} in + ${usage.completionTokens.toLocaleString()} out · ~${costStr}`;
+	return `${tokenStr} · ~${costStr}`;
 }
