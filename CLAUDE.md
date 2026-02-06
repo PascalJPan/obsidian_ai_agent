@@ -66,6 +66,7 @@
 - [x] **Scout Agent Enhancements**:
   - New `list_all_tags` tool - Discover all tags in vault with counts
   - New `ask_user` tool - Ask clarifying questions with pause/resume support
+  - New `record_finding` tool - Pass arbitrary data (tag lists, folder structures) to Task Agent
   - Removed `recommendedMode` - Task Agent determines mode from task
   - Added exploration summary tracking
   - Improved prompts with "fetch before select" guidance
@@ -305,6 +306,7 @@ An AI agent that explores the vault to find relevant notes for the user's task.
 - `explore_vault` - Explore vault structure: list folder contents or find notes by tag
 - `list_all_tags` - List all tags in vault with note counts
 - `ask_user` - Ask clarifying questions (pauses execution, resumes after user response)
+- `record_finding` - Record data findings (tag lists, folder structures) to pass to Task Agent
 
 **Running Selection Pattern:**
 - Agent calls `update_selection()` after each exploration step
@@ -383,6 +385,7 @@ interface PipelineContext {
     reasoning: string;
     confidence: 'exploring' | 'confident' | 'done';
     explorationSummary: string;
+    findings: ScoutFinding[];  // Data findings passed to Task Agent
     tokensUsed: number;
   };
   web?: {

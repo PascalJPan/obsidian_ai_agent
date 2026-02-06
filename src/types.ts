@@ -159,6 +159,12 @@ export interface NoteSelectionMetadata {
 	};
 }
 
+// Scout finding - data the Scout Agent wants to pass to the Task Agent
+export interface ScoutFinding {
+	label: string;    // e.g. "Vault Tags", "Folder Structure"
+	data: string;     // The actual content (pre-formatted by Scout)
+}
+
 // User clarification response for ask_user tool
 export interface UserClarificationResponse {
 	answer: string;          // User's typed response
@@ -172,6 +178,7 @@ export interface ContextAgentResult {
 	confidence: 'exploring' | 'confident' | 'done';  // Moved from internal
 	explorationSummary: string;  // Human-readable exploration journey
 	toolCalls: ContextAgentToolCall[];  // For progress display
+	findings: ScoutFinding[];           // Data findings to pass to Task Agent
 	tokensUsed?: number;
 	// For ask_user tool - allows pausing/resuming
 	status: 'complete' | 'waiting_for_user';
@@ -235,6 +242,8 @@ export interface ChatMessage {
 	};
 	// Token usage from API response (for assistant messages)
 	tokenUsage?: TokenUsage;
+	// Model used for this response (for accurate historical cost display)
+	model?: string;
 	// Web agent results (for assistant messages in agentic mode)
 	webSources?: WebSource[];
 }
@@ -271,7 +280,8 @@ export interface WebAgentResult {
 	searchPerformed: boolean;
 	webContext: string;
 	sources: WebSource[];
-	tokensUsed: number;
+	tokensUsed: number;              // Total: API reasoning + content tokens
+	contentTokens?: number;          // Estimated tokens from fetched page content only
 	searchQuery?: string;
 	skipReason?: string;
 	error?: {
@@ -309,6 +319,7 @@ export interface PipelineContext {
 		reasoning: string;
 		confidence: 'exploring' | 'confident' | 'done';
 		explorationSummary: string;    // Human-readable exploration journey
+		findings: ScoutFinding[];      // Data findings to pass to Task Agent
 		tokensUsed: number;
 	};
 	web?: {

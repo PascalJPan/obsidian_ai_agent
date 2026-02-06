@@ -11,11 +11,6 @@ export function isFileExcluded(filePath: string, excludedFolders: string[]): boo
 		if (filePath.startsWith(normalizedFolder)) {
 			return true;
 		}
-		// Check if parent folder matches
-		const parentPath = filePath.substring(0, filePath.lastIndexOf('/'));
-		if (parentPath === folder) {
-			return true;
-		}
 	}
 	return false;
 }

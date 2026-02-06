@@ -1,27 +1,17 @@
 /**
- * Prompt definitions and builders for ObsidianAgent
+ * Task Agent prompts and builders
  *
- * This module contains:
- * - Core system prompts (hardcoded, not user-editable)
- * - Dynamic prompt builders based on capabilities and scope
- *
- * No vault or UI access.
+ * Contains:
+ * - Core edit prompt (CORE_EDIT_PROMPT)
+ * - Dynamic prompt builders (capabilities, scope, position types, edit rules)
+ * - Task Agent system prompt builder
+ * - Pipeline awareness section builder
  */
 
-import { AICapabilities, EditableScope } from '../types';
-
-// Token limit constants for validation
-export const BASE_SYSTEM_PROMPT_ESTIMATE = 2500; // Approximate tokens for full system prompt
-export const MINIMUM_TOKEN_LIMIT = 3000;         // Minimum allowed token limit setting
-
-// Helper: Get current date string for prompts
-export function getCurrentDateString(): string {
-	const now = new Date();
-	return now.toISOString().split('T')[0]; // YYYY-MM-DD
-}
+import { AICapabilities, EditableScope, WebSource, PipelineContext, NoteSelectionMetadata } from '../../types';
+import { getCurrentDateString } from './index';
 
 // Core prompts - hardcoded, not user-editable
-// Note: Use buildCoreEditPrompt() to include current date
 export const CORE_EDIT_PROMPT = `You are an AI Agent for an Obsidian vault. You can edit notes or answer questions.
 
 IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation outside the JSON.
@@ -41,7 +31,7 @@ Your response must follow this exact format:
 HANDLING QUESTIONS:
 - If the user asks a question or requests information (not edits), return an empty edits array
 - Put your answer in the "summary" field
-- Example: { "edits": [], "summary": "The answer to your question is..." }`
+- Example: { "edits": [], "summary": "The answer to your question is..." }`;
 
 // Helper: Build forbidden actions section based on disabled capabilities
 export function buildForbiddenActions(capabilities: AICapabilities, editableScope: EditableScope): string {
@@ -181,7 +171,7 @@ export function buildEditRules(): string {
    - Use the number BEFORE the colon as your line reference
    - Line numbers start at 1
 
-5. **Content**: Keep edits focused and minimal. Don't over-modify.
+5. **Content**: Make all changes necessary to fulfill the task. Avoid unrelated modifications.
 
 6. **Summary**: Always provide a clear summary explaining what you changed and why
 
@@ -198,7 +188,147 @@ export function buildEditRules(): string {
    - When linking to another note in the vault, ALWAYS use Obsidian wikilinks ([[Note Name]]) instead of Markdown links.
    - Do NOT include the .md extension inside wikilinks.
    - Use the note's filename (basename) exactly as it appears in the vault.
-   - Only create links to notes that already exist in the context or are being created in the same edit.
+   - Only link to notes you are confident exist in the vault. Prefer notes visible in the context.
   10. Tags (#tag) are for categorization; use [[links]] for conceptual connections.
 `;
+}
+
+/**
+ * Build system prompt for Task Agent
+ *
+ * Combines core prompt with dynamic sections based on capabilities and scope.
+ */
+export function buildTaskAgentSystemPrompt(
+	capabilities: AICapabilities,
+	editableScope: EditableScope,
+	customPrompts?: { character?: string; edit?: string },
+	webSources?: WebSource[],
+	pipelineContext?: PipelineContext
+): string {
+	const parts: string[] = [CORE_EDIT_PROMPT];
+
+	// Add current date so AI knows what "current" means
+	parts.push(`\n\nTODAY'S DATE: ${getCurrentDateString()}`);
+
+	// Add dynamic scope rules
+	parts.push('\n\n' + buildScopeInstruction(editableScope));
+
+	// Add dynamic position types based on capabilities
+	parts.push('\n\n' + buildPositionTypes(capabilities));
+
+	// Add general rules
+	parts.push('\n\n' + buildEditRules());
+
+	// Add forbidden actions section (explicit warnings about what will be rejected)
+	const forbiddenSection = buildForbiddenActions(capabilities, editableScope);
+	if (forbiddenSection) {
+		parts.push(forbiddenSection);
+	}
+
+	// Add prior agent context if available
+	const pipelineSection = buildPipelineAwarenessSection(pipelineContext);
+	if (pipelineSection) {
+		parts.push(pipelineSection);
+	}
+
+	// Add user customizations
+	if (customPrompts?.character?.trim()) {
+		parts.push('\n\n--- Character Instructions ---');
+		parts.push(customPrompts.character);
+	}
+
+	if (customPrompts?.edit?.trim()) {
+		parts.push('\n\n--- Edit Style Instructions ---');
+		parts.push(customPrompts.edit);
+	}
+
+	// Add web citation instructions if web sources present
+	if (webSources && webSources.length > 0) {
+		parts.push('\n\n--- Web Sources ---');
+		parts.push('You have access to web research results in the context. When using information from web sources, cite them at the end of your response using markdown links: [Title](url)');
+	}
+
+	return parts.join('\n');
+}
+
+/**
+ * Build the pipeline awareness section for system prompt
+ *
+ * This tells the Task Agent what prior agents discovered and why certain notes were selected.
+ */
+export function buildPipelineAwarenessSection(pipelineContext?: PipelineContext): string | null {
+	if (!pipelineContext) return null;
+
+	const sections: string[] = [];
+	sections.push('\n\n--- Prior Agent Context ---');
+
+	// Scout Agent section
+	if (pipelineContext.scout) {
+		const scout = pipelineContext.scout;
+		const confidenceText = scout.confidence === 'done' ? 'high confidence' :
+			scout.confidence === 'confident' ? 'moderate confidence' : 'exploring';
+
+		sections.push(`\nSCOUT AGENT: Selected ${scout.selectedNotes.length} notes with ${confidenceText}.`);
+		sections.push(`Reasoning: "${scout.reasoning}"`);
+
+		// Highlight high-relevance notes
+		const highRelevanceNotes = scout.selectedNotes.filter(note => {
+			if (note.scoutMetadata?.semanticScore && note.scoutMetadata.semanticScore > 0.5) return true;
+			if (note.scoutMetadata?.keywordMatchType === 'title') return true;
+			return false;
+		});
+
+		if (highRelevanceNotes.length > 0) {
+			const noteDescriptions = highRelevanceNotes.slice(0, 10).map(note => {
+				const name = note.path.split('/').pop() || note.path;
+				const annotations: string[] = [];
+
+				if (note.scoutMetadata?.semanticScore) {
+					annotations.push(`semantic: ${Math.round(note.scoutMetadata.semanticScore * 100)}%`);
+				}
+				if (note.scoutMetadata?.keywordMatchType) {
+					annotations.push(`keyword: ${note.scoutMetadata.keywordMatchType}`);
+				}
+
+				return `${name}${annotations.length > 0 ? ` [${annotations.join(', ')}]` : ''}`;
+			});
+
+			sections.push(`High-relevance: ${noteDescriptions.join(', ')}`);
+		}
+
+		if (scout.explorationSummary && scout.explorationSummary !== 'No exploration steps performed.') {
+			sections.push(`Exploration: ${scout.explorationSummary}`);
+		}
+
+		if (scout.findings && scout.findings.length > 0) {
+			sections.push(`Findings recorded: ${scout.findings.map(f => f.label).join(', ')} (see SCOUT FINDINGS in context)`);
+		}
+	}
+
+	// Web Agent section
+	if (pipelineContext.web && pipelineContext.web.searchPerformed) {
+		const web = pipelineContext.web;
+
+		if (web.searchQueries.length > 0) {
+			sections.push(`\nWEB AGENT: Searched "${web.searchQueries[0]}"${web.searchQueries.length > 1 ? ` (+${web.searchQueries.length - 1} more queries)` : ''}`);
+		}
+
+		if (web.evaluationReasoning) {
+			sections.push(`Why searched: "${web.evaluationReasoning}"`);
+		}
+
+		if (web.sources.length > 0) {
+			sections.push(`Sources: ${web.sources.length} fetched`);
+		}
+	} else if (pipelineContext.web && pipelineContext.web.evaluationReasoning) {
+		sections.push(`\nWEB AGENT: Search skipped.`);
+		sections.push(`Reason: "${pipelineContext.web.evaluationReasoning}"`);
+	}
+
+	sections.push('--- End Prior Agent Context ---');
+
+	// Only return if we have meaningful content
+	if (sections.length <= 2) return null; // Only header and footer
+
+	return sections.join('\n');
 }
