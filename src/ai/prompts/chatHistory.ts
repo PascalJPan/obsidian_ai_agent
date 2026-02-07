@@ -1,7 +1,7 @@
 /**
  * Shared chat history formatting for ObsidianAgent
  *
- * Used by both main.ts (buildMessagesWithHistory) and taskAgent.ts (buildMessagesFromHistory).
+ * Used by both main.ts (buildMessagesWithHistory) and agent.ts (unified agent).
  * Standardizes truncation at 500 characters for edit content previews.
  */
 
@@ -67,8 +67,17 @@ export function buildMessagesFromHistory(
 
 				// Add edit results if present
 				if (msg.editResults) {
-					if (msg.editResults.success > 0 || msg.editResults.failed > 0) {
-						messageContent += `\n[EDIT RESULTS: ${msg.editResults.success} succeeded, ${msg.editResults.failed} failed]`;
+					// Show user feedback if available (accepted/rejected/pending)
+					if (msg.editResults.accepted !== undefined || msg.editResults.rejected !== undefined) {
+						const parts: string[] = [];
+						if (msg.editResults.accepted) parts.push(`${msg.editResults.accepted} accepted`);
+						if (msg.editResults.rejected) parts.push(`${msg.editResults.rejected} rejected`);
+						if (msg.editResults.pending) parts.push(`${msg.editResults.pending} pending`);
+						if (parts.length > 0) {
+							messageContent += `\n[EDIT FEEDBACK: ${parts.join(', ')}]`;
+						}
+					} else if (msg.editResults.success > 0 || msg.editResults.failed > 0) {
+						messageContent += `\n[EDIT RESULTS: ${msg.editResults.success} proposed, ${msg.editResults.failed} failed]`;
 					}
 					if (msg.editResults.failures.length > 0) {
 						messageContent += '\n[FAILURES:]\n';

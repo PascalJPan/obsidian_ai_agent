@@ -14,18 +14,20 @@
 	overflow: hidden;
 }
 
-/* Chat container - takes up available space */
+/* Chat container - takes up available space, matches bottom section width */
 .ai-chat-container {
 	flex: 1;
 	overflow-y: auto;
 	padding: 12px;
+	margin: 4px 8px 6px 8px;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
 	user-select: text;
 	-webkit-user-select: text;
 	background: var(--background-primary);
-	border-radius: 0 0 12px 12px;
+	border-radius: 12px;
+	border: 1px solid var(--background-modifier-border);
 }
 
 /* Chat header with clear button */
@@ -39,6 +41,8 @@
 .ai-assistant-clear-btn {
 	background: none;
 	border: none;
+	width: 28px;
+	height: 28px;
 	padding: 4px;
 	cursor: pointer;
 	color: var(--text-muted);
@@ -117,6 +121,11 @@
 	background: var(--interactive-accent);
 	color: var(--text-on-accent);
 	border-bottom-right-radius: 4px;
+}
+
+.ai-chat-message-user .ai-chat-bubble::selection,
+.ai-chat-message-user .ai-chat-bubble *::selection {
+	background: rgba(255, 255, 255, 0.3);
 }
 
 .ai-chat-message-assistant .ai-chat-bubble {
@@ -308,6 +317,13 @@
 	50% { opacity: 1; }
 }
 
+/* Hint text at top of context toggle */
+.ai-assistant-context-hint {
+	font-size: 0.75em;
+	color: var(--text-muted);
+	margin: 0 0 8px 0;
+}
+
 /* Context preview button inside toggle */
 .ai-assistant-context-preview-btn {
 	display: flex;
@@ -315,7 +331,7 @@
 	gap: 6px;
 	width: 100%;
 	padding: 8px 10px;
-	margin-bottom: 10px;
+	margin-top: 10px;
 	background: var(--background-primary);
 	border: 1px dashed var(--background-modifier-border);
 	border-radius: 6px;
@@ -385,6 +401,10 @@
 	font-weight: normal;
 }
 
+.ai-assistant-bottom-section .ai-assistant-toggle summary {
+	font-size: 0.75em;
+}
+
 /* ===================================
    Link Depth Slider
    =================================== */
@@ -447,16 +467,6 @@
 	text-align: right;
 }
 
-/* ===================================
-   Folder Checkbox Section
-   =================================== */
-
-.ai-assistant-folder-section {
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-	margin-top: 10px;
-}
-
 /* Radio groups */
 .ai-assistant-radio-group {
 	display: flex;
@@ -480,13 +490,6 @@
 
 .ai-assistant-radio-label input[type="radio"] {
 	margin: 0;
-}
-
-/* Checkboxes */
-.ai-assistant-checkboxes {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
 }
 
 .ai-assistant-checkbox-label {
@@ -514,75 +517,10 @@
 	margin-top: 0;
 }
 
-/* ===================================
-   Agent Toggle Buttons
-   =================================== */
-
-.ai-agent-toggles {
-	display: flex;
-	gap: 8px;
-	justify-content: stretch;
-	width: 100%;
-}
-
-.ai-agent-toggle-btn {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
-	flex: 1;
-	padding: 6px 12px;
-	border-radius: 8px;
-	cursor: pointer;
-	transition: opacity 0.2s, background 0.2s;
-	background: var(--background-primary);
-	border: 1px solid var(--background-modifier-border);
-}
-
-.ai-agent-toggle-btn.active {
-	background: var(--interactive-accent);
-	border-color: var(--interactive-accent);
-	color: var(--text-on-accent);
-}
-
-.ai-agent-toggle-btn:not(.active) {
-	opacity: 0.5;
-}
-
-.ai-agent-toggle-btn:hover {
-	opacity: 1;
-}
-
-.ai-agent-toggle-btn .icon {
-	display: flex;
-	align-items: center;
-}
-
-.ai-agent-toggle-btn .icon svg {
-	width: 16px;
-	height: 16px;
-}
-
-.ai-agent-toggle-btn .label {
-	font-size: 0.8em;
-	font-weight: 500;
-}
-
 /* Disabled state for sliders */
 .ai-assistant-depth-slider:disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
-}
-
-/* Disabled state for agent toggle buttons */
-.ai-agent-toggle-btn:disabled {
-	opacity: 0.35;
-	cursor: not-allowed;
-}
-
-.ai-agent-toggle-btn:disabled:hover {
-	opacity: 0.35;
 }
 
 /* Disabled send button state */
@@ -1157,13 +1095,6 @@ button:disabled {
 	background: rgba(255, 100, 100, 0.3);
 }
 
-/* Restricted count in context summary */
-.ai-assistant-context-info {
-	font-size: 0.85em;
-	color: var(--text-muted);
-	font-weight: normal;
-}
-
 /* ===================================
    Actions Bar
    =================================== */
@@ -1238,11 +1169,6 @@ button:disabled {
 	padding-top: 10px;
 	border-top: 1px solid var(--background-modifier-border);
 	margin-top: 10px;
-}
-
-.ai-assistant-semantic-slider {
-	margin-top: 8px;
-	margin-left: 22px;
 }
 
 .ai-assistant-semantic-warning {
@@ -1384,16 +1310,8 @@ button:disabled {
 }
 
 /* ===================================
-   Agentic Mode UI
+   Agent Progress UI
    =================================== */
-
-/* Agentic sub-mode selector */
-.ai-assistant-agentic-submode {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	margin-left: 4px;
-}
 
 /* Agent progress container in chat */
 .ai-agent-progress-container {
@@ -1497,172 +1415,6 @@ button:disabled {
 	white-space: nowrap;
 }
 
-/* Selected notes toggle */
-.ai-agent-notes-toggle {
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.ai-agent-notes-toggle summary {
-	cursor: pointer;
-	font-size: 0.85em;
-	color: var(--text-muted);
-	user-select: none;
-}
-
-.ai-agent-notes-toggle summary:hover {
-	color: var(--text-normal);
-}
-
-/* Copy button in notes toggle */
-.ai-agent-copy-btn {
-	background: none;
-	border: none;
-	padding: 4px;
-	cursor: pointer;
-	color: var(--text-muted);
-	border-radius: 4px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	opacity: 0.6;
-	transition: opacity 0.15s, background 0.15s, color 0.15s;
-	margin-left: 8px;
-	vertical-align: middle;
-}
-
-.ai-agent-copy-btn:hover {
-	opacity: 1;
-	background: var(--background-modifier-hover);
-	color: var(--interactive-accent);
-}
-
-.ai-agent-copy-btn svg {
-	width: 14px;
-	height: 14px;
-}
-
-.ai-agent-notes-toggle[open] summary {
-	margin-bottom: 8px;
-}
-
-.ai-agent-notes-content {
-	font-size: 0.85em;
-	color: var(--text-muted);
-	padding: 8px 10px;
-	background: var(--background-primary);
-	border-radius: 4px;
-}
-
-.ai-agent-notes-list {
-	margin: 0;
-	padding-left: 18px;
-	line-height: 1.6;
-}
-
-.ai-agent-notes-list li {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.ai-agent-note-path {
-	color: var(--text-normal);
-	font-family: var(--font-monospace);
-	font-size: 0.9em;
-}
-
-.ai-agent-note-link {
-	cursor: pointer;
-	color: var(--text-muted);
-	opacity: 0.6;
-	transition: opacity 0.15s, color 0.15s;
-	display: inline-flex;
-	align-items: center;
-}
-
-.ai-agent-note-link:hover {
-	opacity: 1;
-	color: var(--interactive-accent);
-}
-
-.ai-agent-note-link svg {
-	width: 14px;
-	height: 14px;
-}
-
-/* Findings toggle */
-.ai-agent-findings-toggle {
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.ai-agent-findings-toggle summary {
-	cursor: pointer;
-	font-size: 0.85em;
-	color: var(--text-muted);
-	user-select: none;
-}
-
-.ai-agent-findings-toggle summary:hover {
-	color: var(--text-normal);
-}
-
-.ai-agent-findings-toggle[open] summary {
-	margin-bottom: 8px;
-}
-
-.ai-agent-findings-content {
-	font-size: 0.85em;
-	color: var(--text-muted);
-	padding: 8px 10px;
-	background: var(--background-primary);
-	border-radius: 4px;
-}
-
-.ai-agent-finding-item {
-	margin-bottom: 6px;
-}
-
-.ai-agent-finding-data {
-	white-space: pre-wrap;
-	margin-top: 4px;
-	line-height: 1.5;
-}
-
-/* Reasoning toggle */
-.ai-agent-reasoning-toggle {
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.ai-agent-reasoning-toggle summary {
-	cursor: pointer;
-	font-size: 0.85em;
-	color: var(--text-muted);
-	user-select: none;
-}
-
-.ai-agent-reasoning-toggle summary:hover {
-	color: var(--text-normal);
-}
-
-.ai-agent-reasoning-toggle[open] summary {
-	margin-bottom: 8px;
-}
-
-.ai-agent-reasoning-content {
-	font-size: 0.85em;
-	color: var(--text-muted);
-	line-height: 1.5;
-	padding: 8px 10px;
-	background: var(--background-primary);
-	border-radius: 4px;
-}
-
 /* Animation for progress steps and separators appearing */
 .ai-agent-progress-step,
 .ai-agent-round-header,
@@ -1688,6 +1440,148 @@ button:disabled {
 
 .ai-agent-progress-container.completed .ai-agent-progress-title {
 	color: var(--text-success, #4ade80);
+}
+
+.ai-agent-progress-container.completed .ai-chat-detail-section {
+	margin-top: 6px;
+}
+
+/* Expandable tool result details */
+.ai-agent-tool-details {
+	animation: fadeInStep 0.2s ease-in;
+}
+
+.ai-agent-tool-details summary {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	cursor: pointer;
+	list-style: none;
+}
+
+.ai-agent-tool-details summary::marker,
+.ai-agent-tool-details summary::-webkit-details-marker {
+	display: none;
+}
+
+.ai-agent-tool-expand-icon {
+	margin-left: auto;
+	font-size: 0.8em;
+	color: var(--text-muted);
+	transition: transform 0.2s;
+	flex-shrink: 0;
+}
+
+.ai-agent-tool-details[open] .ai-agent-tool-expand-icon {
+	transform: rotate(90deg);
+}
+
+.ai-agent-tool-result {
+	margin: 4px 0 8px 16px;
+	padding: 8px 10px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	font-size: 0.8em;
+	font-family: var(--font-monospace);
+	max-height: 200px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	animation: fadeInStep 0.2s ease-in;
+}
+
+.ai-agent-tool-result pre {
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: inherit;
+	font-family: inherit;
+}
+
+/* Agent thinking/reasoning block */
+.ai-agent-thinking {
+	margin: 6px 0;
+	border-left: 2px solid var(--text-muted);
+	padding-left: 10px;
+	animation: fadeInStep 0.2s ease-in;
+}
+
+.ai-agent-thinking summary {
+	font-size: 0.82em;
+	color: var(--text-muted);
+	font-style: italic;
+	cursor: pointer;
+	list-style: none;
+}
+
+.ai-agent-thinking summary::marker,
+.ai-agent-thinking summary::-webkit-details-marker {
+	display: none;
+}
+
+.ai-agent-thinking-content {
+	font-size: 0.82em;
+	color: var(--text-muted);
+	font-style: italic;
+	padding: 4px 0;
+}
+
+/* Final response detail sections */
+.ai-chat-detail-section {
+	margin-top: 8px;
+	font-size: 0.85em;
+}
+
+.ai-chat-detail-section summary {
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+	color: var(--text-muted);
+	font-size: 0.9em;
+	list-style: none;
+}
+
+.ai-chat-detail-section summary::marker,
+.ai-chat-detail-section summary::-webkit-details-marker {
+	display: none;
+}
+
+.ai-chat-detail-section summary::before {
+	content: '\25B6';
+	font-size: 0.65em;
+	margin-right: 6px;
+	display: inline-block;
+	transition: transform 0.2s ease;
+}
+
+.ai-chat-detail-section[open] summary::before {
+	transform: rotate(90deg);
+}
+
+.ai-chat-detail-section summary:hover {
+	color: var(--text-normal);
+}
+
+.ai-chat-detail-list {
+	margin: 4px 0;
+	padding-left: 18px;
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+.ai-chat-detail-list li {
+	padding: 1px 0;
+}
+
+.ai-chat-detail-list a {
+	color: var(--text-accent);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.ai-chat-detail-list a:hover {
+	text-decoration: underline;
 }
 
 /* ===================================
@@ -1927,238 +1821,6 @@ button:disabled {
 }
 
 /* ===================================
-   Settings Warning Message
-   =================================== */
-
-.ai-settings-warning {
-	color: var(--text-error);
-	font-size: 0.85em;
-	margin-top: 4px;
-	padding: 4px 8px;
-	background: var(--background-modifier-error);
-	border-radius: 4px;
-}
-
-/* ===================================
-   Scout Tool Configuration Grid
-   =================================== */
-
-.ai-settings-tools-grid {
-	display: grid;
-	grid-template-columns: repeat(2, 1fr);
-	gap: 8px;
-	margin: 12px 0;
-}
-
-.ai-settings-tool-item {
-	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	padding: 8px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 4px;
-	background: var(--background-primary);
-}
-
-.ai-settings-tool-item input[type="checkbox"] {
-	margin-top: 2px;
-	flex-shrink: 0;
-}
-
-.ai-settings-tool-name {
-	font-size: 0.9em;
-	font-weight: 500;
-	color: var(--text-normal);
-}
-
-.ai-settings-tool-desc {
-	font-size: 0.8em;
-	color: var(--text-muted);
-	margin-top: 2px;
-}
-
-/* Expected tokens display */
-.ai-settings-expected-tokens {
-	font-size: 0.85em;
-	opacity: 0.8;
-	margin-top: 12px;
-	padding: 8px;
-	background: var(--background-secondary);
-	border-radius: 4px;
-	border-left: 3px solid var(--interactive-accent);
-}
-
-/* ===================================
-   Web Agent Progress UI
-   =================================== */
-
-.ai-web-agent-progress-container {
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-left: 3px solid #4f9cf9;
-	border-radius: 8px;
-	padding: 12px 14px;
-	margin: 8px 0;
-}
-
-.ai-web-agent-progress-header {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	font-weight: 500;
-	font-size: 0.95em;
-	margin-bottom: 8px;
-}
-
-.ai-web-agent-progress-icon {
-	font-size: 1.1em;
-}
-
-.ai-web-agent-progress-title {
-	color: var(--text-normal);
-}
-
-.ai-web-agent-progress-step {
-	display: flex;
-	align-items: flex-start;
-	gap: 6px;
-	font-size: 0.85em;
-	padding: 3px 0;
-	color: var(--text-muted);
-}
-
-.ai-web-agent-progress-bullet {
-	color: #4f9cf9;
-	flex-shrink: 0;
-}
-
-.ai-web-agent-progress-text {
-	color: var(--text-normal);
-}
-
-.ai-web-agent-progress-detail {
-	color: var(--text-muted);
-	font-size: 0.9em;
-}
-
-/* Web Agent Sources Section */
-.ai-web-agent-sources-section {
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.ai-web-agent-sources-header {
-	font-size: 0.85em;
-	font-weight: 500;
-	color: var(--text-muted);
-	margin-bottom: 6px;
-}
-
-.ai-web-agent-sources-list {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-}
-
-.ai-web-agent-sources-list li {
-	font-size: 0.85em;
-	padding: 3px 0;
-}
-
-.ai-web-agent-sources-list a {
-	color: var(--text-accent);
-	text-decoration: none;
-}
-
-.ai-web-agent-sources-list a:hover {
-	text-decoration: underline;
-}
-
-/* Web Agent Token Usage */
-.ai-web-agent-tokens {
-	font-size: 0.8em;
-	color: var(--text-muted);
-	margin-top: 8px;
-	opacity: 0.8;
-}
-
-/* Completed state styling */
-.ai-web-agent-progress-container.completed .ai-web-agent-progress-icon {
-	color: var(--text-success, #4ade80);
-}
-
-.ai-web-agent-progress-container.completed .ai-web-agent-progress-title {
-	color: var(--text-success, #4ade80);
-}
-
-/* Skipped state styling */
-.ai-web-agent-progress-container.skipped .ai-web-agent-progress-icon {
-	color: var(--text-muted);
-}
-
-.ai-web-agent-progress-container.skipped .ai-web-agent-progress-title {
-	color: var(--text-muted);
-}
-
-/* Error state styling */
-.ai-web-agent-progress-container.error {
-	border-left-color: var(--text-error);
-}
-
-.ai-web-agent-progress-container.error .ai-web-agent-progress-icon {
-	color: var(--text-error);
-}
-
-.ai-web-agent-progress-container.error .ai-web-agent-progress-title {
-	color: var(--text-error);
-}
-
-/* Animation for progress steps appearing */
-.ai-web-agent-progress-step {
-	animation: fadeInStep 0.2s ease-in;
-}
-
-/* ===================================
-   Web Sources in Chat Messages
-   =================================== */
-
-.ai-chat-web-sources {
-	margin-top: 12px;
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.ai-chat-web-sources-header {
-	font-size: 0.8em;
-	font-weight: 500;
-	color: var(--text-muted);
-	margin-bottom: 6px;
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
-}
-
-.ai-chat-web-sources-list {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-}
-
-.ai-chat-web-sources-list li {
-	font-size: 0.85em;
-	padding: 2px 0;
-}
-
-.ai-chat-web-source-link {
-	color: var(--text-accent);
-	text-decoration: none;
-}
-
-.ai-chat-web-source-link:hover {
-	text-decoration: underline;
-}
-
-/* ===================================
    User Clarification UI (ask_user tool)
    =================================== */
 
@@ -2248,4 +1910,364 @@ button:disabled {
 
 .ai-clarification-send:hover {
 	background: var(--interactive-accent-hover);
+}
+
+/* ===================================
+   Copy Notes Bubble
+   =================================== */
+
+.ai-copy-notes-bubble {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 8px;
+	padding: 12px 16px;
+	margin: 8px 0;
+	max-width: 85%;
+	align-self: flex-start;
+}
+
+.ai-copy-notes-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.ai-copy-notes-icon {
+	font-size: 1.1em;
+	flex-shrink: 0;
+}
+
+.ai-copy-notes-title {
+	font-weight: 500;
+	font-size: 0.95em;
+	color: var(--text-normal);
+	flex: 1;
+}
+
+.ai-copy-notes-btn {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	border-radius: 6px;
+	padding: 4px 12px;
+	font-size: 0.8em;
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.15s ease;
+	flex-shrink: 0;
+}
+
+.ai-copy-notes-btn:hover {
+	background: var(--interactive-accent-hover);
+}
+
+.ai-copy-notes-btn.copied {
+	background: var(--text-success, #4ade80);
+	color: var(--background-primary);
+}
+
+.ai-copy-notes-toggle {
+	margin-top: 8px;
+}
+
+.ai-copy-notes-toggle summary {
+	cursor: pointer;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	user-select: none;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.ai-copy-notes-toggle summary:hover {
+	color: var(--text-normal);
+}
+
+.ai-copy-notes-toggle summary::marker,
+.ai-copy-notes-toggle summary::-webkit-details-marker {
+	display: none;
+}
+
+.ai-copy-notes-toggle summary::before {
+	content: '\25B6';
+	font-size: 0.7em;
+	transition: transform 0.2s ease;
+}
+
+.ai-copy-notes-toggle[open] summary::before {
+	transform: rotate(90deg);
+}
+
+.ai-copy-notes-list {
+	padding: 6px 0 0 4px;
+	font-size: 0.9em;
+}
+
+.ai-copy-notes-list ul {
+	margin: 0;
+	padding-left: 16px;
+	list-style: none;
+}
+
+.ai-copy-notes-list li {
+	padding: 2px 0;
+}
+
+.ai-copy-notes-list a.internal-link {
+	color: var(--link-color);
+	text-decoration-line: underline;
+	text-decoration-style: solid;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+
+.ai-copy-notes-list a.internal-link:hover {
+	color: var(--link-color-hover, var(--link-color));
+}
+
+/* ===================================
+   Pending Deletion Bubble
+   =================================== */
+
+.ai-pending-deletion-bubble {
+	background: var(--background-secondary);
+	border: 1px solid var(--text-error);
+	border-left: 3px solid var(--text-error);
+	border-radius: 8px;
+	padding: 12px 16px;
+	margin: 8px 0;
+	max-width: 85%;
+	align-self: flex-start;
+}
+
+.ai-pending-deletion-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.ai-pending-deletion-icon {
+	font-size: 1.3em;
+	flex-shrink: 0;
+}
+
+.ai-pending-deletion-info {
+	flex: 1;
+	min-width: 0;
+}
+
+.ai-pending-deletion-title {
+	font-weight: 500;
+	font-size: 0.95em;
+	color: var(--text-normal);
+}
+
+.ai-pending-deletion-path {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ai-pending-deletion-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+	justify-content: flex-end;
+}
+
+.ai-pending-deletion-reject {
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--background-modifier-border);
+	padding: 5px 14px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 0.85em;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.ai-pending-deletion-reject:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ai-pending-deletion-accept {
+	background: rgba(255, 100, 100, 0.2);
+	color: var(--text-error);
+	border: 1px solid var(--text-error);
+	padding: 5px 14px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 0.85em;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.ai-pending-deletion-accept:hover {
+	background: rgba(255, 100, 100, 0.35);
+}
+
+.ai-pending-deletion-resolved {
+	border-color: var(--background-modifier-border);
+	border-left-width: 1px;
+}
+
+.ai-pending-deletion-result {
+	font-size: 0.9em;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* ===================================
+   Tool Toggle Pills (Settings)
+   =================================== */
+
+.ai-tool-toggles {
+	margin: 8px 0 16px;
+}
+
+.ai-tool-toggle-group {
+	margin-bottom: 12px;
+}
+
+.ai-tool-toggle-group-label {
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--text-muted);
+	margin-bottom: 6px;
+}
+
+.ai-tool-toggle-pills {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.ai-tool-toggle-pill {
+	display: inline-flex;
+	align-items: center;
+	padding: 4px 12px;
+	border-radius: 14px;
+	font-size: 12px;
+	font-weight: 500;
+	border: 1px solid var(--background-modifier-border);
+	cursor: pointer;
+	transition: all 0.15s ease;
+	user-select: none;
+}
+
+.ai-tool-toggle-pill.is-on {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+}
+
+.ai-tool-toggle-pill.is-on:hover {
+	opacity: 0.85;
+}
+
+.ai-tool-toggle-pill.is-off {
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	border-color: var(--background-modifier-border);
+}
+
+.ai-tool-toggle-pill.is-off:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ai-tool-toggle-pill.is-locked {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.ai-tool-toggle-pill.is-forced-off {
+	background: var(--background-secondary);
+	color: var(--text-faint);
+	border-color: var(--background-modifier-border);
+	text-decoration: line-through;
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+
+/* ============================================
+   Command Whitelist Cards
+   ============================================ */
+
+.ai-command-whitelist-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.ai-command-whitelist-item {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	padding: 10px 14px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	transition: border-color 0.15s ease;
+}
+
+.ai-command-whitelist-item:hover {
+	border-color: var(--interactive-accent);
+}
+
+.ai-command-whitelist-info {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-width: 0;
+}
+
+.ai-command-whitelist-name {
+	font-weight: 600;
+	font-size: 0.9em;
+	color: var(--text-normal);
+}
+
+.ai-command-whitelist-desc {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-top: 2px;
+}
+
+.ai-command-whitelist-remove {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 4px;
+	margin-left: 8px;
+	flex-shrink: 0;
+	transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ai-command-whitelist-remove:hover {
+	color: var(--text-error);
+	background: var(--background-modifier-hover);
+}
+
+.ai-command-whitelist-empty {
+	font-style: italic;
+	color: var(--text-muted);
+	font-size: 0.85em;
+	padding: 8px 0;
 }

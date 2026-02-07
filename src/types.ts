@@ -5,17 +5,9 @@
 import { TFile } from 'obsidian';
 
 // Type definitions
-export type ContextScope = 'current' | 'linked' | 'folder';  // Legacy - kept for backwards compatibility
 export type EditableScope = 'current' | 'linked' | 'context';
 
-// Agent toggle states
-export interface AgentToggles {
-	scout: boolean;  // Scout Agent for vault exploration
-	web: boolean;    // Web Agent for external research
-	task: boolean;   // Task Agent for answering/editing
-}
-
-// New context scope configuration
+// Context scope configuration
 export type LinkDepth = 0 | 1 | 2 | 3;
 
 export interface ContextScopeConfig {
@@ -115,106 +107,35 @@ export interface InlineEdit {
 	file?: string;
 }
 
-// Agentic mode types
-export interface AgenticModeConfig {
-	scoutModel: string;       // Model for Phase 1 exploration
-	maxIterations: number;    // 1-10, max tool-calling rounds
-	maxNotes: number;         // 3-50, max notes context agent can select
-	tokenLimit?: number;      // Token budget for scout to be aware of (optional)
-	showTokenBudget?: boolean; // Whether to show token budget in prompts
-}
-
-// Scout agent tool configuration
-export interface ScoutToolConfig {
-	listNotes: boolean;
-	searchKeyword: boolean;
-	searchSemantic: boolean;
-	searchTaskRelevant: boolean;
-	getLinks: boolean;
-	getLinksRecursive: boolean;
-	viewAllNotes: boolean;    // View all note names with frontmatter
-	exploreVault: boolean;    // Explore folders and tags
-	listAllTags: boolean;     // List all tags in vault
-	askUser: boolean;         // Ask user clarifying questions
-	keywordLimit: number;
-	semanticLimit: number;
-	listNotesLimit: number;
-}
-
-// Context agent tool call types
-export interface ContextAgentToolCall {
-	name: string;
-	arguments: Record<string, unknown>;
-}
-
-// Metadata about how each note was selected by Scout
-export interface NoteSelectionMetadata {
-	path: string;
-	selectionReason: 'current' | 'linked' | 'folder' | 'semantic' | 'keyword' | 'manual';
-	// Scout-specific metadata (when scout selected this note)
-	scoutMetadata?: {
-		semanticScore?: number;        // 0-1 from embedding search
-		keywordMatchType?: 'title' | 'heading' | 'content';
-		linkDepth?: number;            // 1, 2, or 3
-	};
-}
-
-// Scout finding - data the Scout Agent wants to pass to the Task Agent
-export interface ScoutFinding {
-	label: string;    // e.g. "Vault Tags", "Folder Structure"
-	data: string;     // The actual content (pre-formatted by Scout)
-}
-
-// User clarification response for ask_user tool
-export interface UserClarificationResponse {
-	answer: string;          // User's typed response
-	selectedOption?: number; // 1-indexed if user chose an option
-}
-
-export interface ContextAgentResult {
-	selectedPaths: string[];
-	selectedNotes: NoteSelectionMetadata[];  // Rich metadata per note
-	reasoning: string;
-	confidence: 'exploring' | 'confident' | 'done';  // Moved from internal
-	explorationSummary: string;  // Human-readable exploration journey
-	toolCalls: ContextAgentToolCall[];  // For progress display
-	findings: ScoutFinding[];           // Data findings to pass to Task Agent
-	tokensUsed?: number;
-	// For ask_user tool - allows pausing/resuming
-	status: 'complete' | 'waiting_for_user';
-	userQuestion?: {
-		question: string;
-		options?: string[];
-	};
-	// Internal state for resuming (serialized conversation)
-	_resumeState?: string;
-}
-
 // Progress event for live UI updates
 export interface AgentProgressEvent {
-	type: 'tool_call' | 'iteration' | 'complete';
+	type: 'tool_call' | 'tool_result' | 'thinking' | 'iteration' | 'complete';
 	message: string;
 	detail?: string;
+	fullContent?: string;  // tool result string or thinking text
 }
 
-// Note preview for context agent
+// Note preview for agent
 export interface NotePreview {
 	path: string;
 	name: string;
 	preview: string;    // First ~200 chars
+	tags?: string[];    // Tags from frontmatter
 }
 
-// Semantic search result for context agent
+// Semantic search result for agent
 export interface SemanticSearchResult {
-	path: string;
+	notePath: string;
 	score: number;
 	heading: string;
 }
 
-// Link info for context agent
+// Link info for agent
 export interface LinkInfo {
 	path: string;
-	direction: 'outgoing' | 'backlink';
+	name?: string;
+	direction: 'outgoing' | 'backlink' | 'incoming' | 'both';
+	depth?: number;
 }
 
 // Token-limited context result for smart note removal
@@ -239,6 +160,9 @@ export interface ChatMessage {
 		success: number;
 		failed: number;
 		failures: Array<{ file: string; error: string }>;
+		accepted?: number;
+		rejected?: number;
+		pending?: number;
 	};
 	// Token usage from API response (for assistant messages)
 	tokenUsage?: TokenUsage;
@@ -246,23 +170,12 @@ export interface ChatMessage {
 	model?: string;
 	// Web agent results (for assistant messages in agentic mode)
 	webSources?: WebSource[];
+	// Notes the agent read during processing
+	notesRead?: string[];
 }
 
-// ============================================
-// Web Agent Types
-// ============================================
-
+// Web search types (used by unified agent)
 export type SearchApiType = 'openai' | 'serper' | 'brave' | 'tavily';
-
-export interface WebAgentSettings {
-	enabled: boolean;              // Master toggle (default: false, opt-in)
-	searchApi: SearchApiType;      // Which search API to use
-	searchApiKey: string;          // API key for search service
-	snippetLimit: number;          // Max search results (default: 8)
-	fetchLimit: number;            // Max pages to fetch in full (default: 3)
-	tokenBudget: number;           // Max tokens for web content (default: 8000)
-	autoSearch: boolean;           // Automatically search when needed (default: true)
-}
 
 export interface WebSource {
 	url: string;
@@ -270,102 +183,128 @@ export interface WebSource {
 	summary: string;
 }
 
-// Enhanced web source with metadata for pipeline context
-export interface EnhancedWebSource extends WebSource {
-	fetchedAt: string;               // ISO timestamp
-	selectionReason?: string;        // Why this source was chosen
+// ============================================
+// Unified Agent Types
+// ============================================
+
+export interface QueryOptions {
+	modified_after?: string;   // ISO date string
+	modified_before?: string;
+	has_property?: string;
+	sort_by?: 'name' | 'modified' | 'created';
+	limit?: number;
 }
 
-export interface WebAgentResult {
-	searchPerformed: boolean;
-	webContext: string;
-	sources: WebSource[];
-	tokensUsed: number;              // Total: API reasoning + content tokens
-	contentTokens?: number;          // Estimated tokens from fetched page content only
-	searchQuery?: string;
-	skipReason?: string;
-	error?: {
-		message: string;
-		detail: string;
-	};
-	// Pipeline metadata
-	searchQueries?: string[];        // All queries attempted
-	evaluationReasoning?: string;    // Why search was/wasn't needed
+export interface QueryResult {
+	path: string;
+	matchingProperties?: Record<string, unknown>;
+	modified?: number;
+	created?: number;
 }
 
-export interface WebAgentProgressEvent {
-	type: 'evaluating' | 'searching' | 'fetching' | 'extracting' | 'complete' | 'skipped' | 'error';
-	message: string;
-	detail?: string;
+export interface DeadLinkResult {
+	source: string;
+	deadLink: string;
 }
 
-// ============================================
-// Pipeline Configuration Types
-// ============================================
-
-export interface PipelineConfig {
-	scoutEnabled: boolean;         // Run Scout Agent (default: true in agentic mode)
-	webEnabled: boolean;           // Run Web Agent (default: false, opt-in)
-	taskEnabled: boolean;          // Run Task Agent (default: true)
+export interface FileInfo {
+	created: number;
+	modified: number;
+	size: number;
 }
 
-// ============================================
-// Pipeline Context Types (accumulated across phases)
-// ============================================
-
-export interface PipelineContext {
-	scout?: {
-		selectedNotes: NoteSelectionMetadata[];
-		reasoning: string;
-		confidence: 'exploring' | 'confident' | 'done';
-		explorationSummary: string;    // Human-readable exploration journey
-		findings: ScoutFinding[];      // Data findings to pass to Task Agent
-		tokensUsed: number;
-	};
-	web?: {
-		searchPerformed: boolean;
-		evaluationReasoning?: string;  // Why web search was/wasn't needed
-		searchQueries: string[];       // All queries attempted
-		sources: EnhancedWebSource[];
-		tokensUsed: number;
-	};
-	tokenAccounting: {
-		scoutTokens: number;
-		webTokens: number;
-		taskTokens: number;
-		totalTokens: number;
-	};
+export interface CommandInfo {
+	id: string;
+	name: string;
 }
 
-// ============================================
-// Task Agent Types
-// ============================================
+export interface WhitelistedCommand {
+	id: string;
+	name: string;
+	description: string;
+}
 
-export interface TaskAgentConfig {
+export interface AgentConfig {
 	model: string;
 	apiKey: string;
 	capabilities: AICapabilities;
 	editableScope: EditableScope;
-	customPrompts?: {
-		character?: string;
-		edit?: string;
-	};
+	maxIterations: number;      // 5-20, default 10
+	maxTotalTokens: number;     // token budget across all rounds
+	webEnabled: boolean;
+	webSearchApi?: SearchApiType;
+	webSearchApiKey?: string;
+	webSnippetLimit?: number;
+	webFetchLimit?: number;
+	webTokenBudget?: number;
+	disabledTools: string[];        // Tool names disabled by user (e.g., ['list_tags', 'move_note'])
+	whitelistedCommands: WhitelistedCommand[];
+	customPrompts?: { character?: string };
 	chatHistoryLength: number;
 	debugMode: boolean;
 }
 
-export interface TaskAgentInput {
-	task: string;               // User's message (for logging)
-	context: string;            // Formatted notes with line numbers (includes task section)
-	chatHistory: ChatMessage[]; // Previous conversation
-	webSources?: WebSource[];   // Optional web context (for citation instructions)
-	pipelineContext?: PipelineContext;  // Context from prior agents
+export interface KeywordResult {
+	path: string;
+	name: string;
+	matchType: 'title' | 'heading' | 'content';
+	matchContext: string;
 }
 
-export interface TaskAgentResult {
+export interface AgentCallbacks {
+	// Vault reading
+	readNote(path: string): Promise<{ content: string; path: string; lineCount: number; excluded?: boolean } | null>;
+	searchKeyword(query: string, limit: number): Promise<KeywordResult[]>;
+	searchSemantic(query: string, topK: number): Promise<SemanticSearchResult[]>;
+	listNotes(folder?: string, limit?: number): Promise<NotePreview[]>;
+	getLinks(path: string, direction: string, depth?: number): Promise<LinkInfo[]>;
+	exploreStructure(action: string, args: Record<string, unknown>): Promise<string>;
+	listTags(): Promise<{ tag: string; count: number }[]>;
+	getAllNotes(includeMetadata?: boolean): Promise<{ path: string; aliases?: string[]; description?: string }[]>;
+	getManualContext(): Promise<string>;
+	// Web
+	webSearch?(query: string, limit: number): Promise<{ title: string; url: string; snippet: string }[]>;
+	fetchPage?(url: string, maxTokens: number): Promise<{ content: string; title: string }>;
+	// Core actions
+	proposeEdit(edit: EditInstruction): Promise<{ success: boolean; error?: string }>;
+	createNote(path: string, content: string): Promise<{ success: boolean; error?: string }>;
+	openNote(path: string): Promise<{ success: boolean; error?: string }>;
+	// Organization actions
+	moveNote(from: string, to: string): Promise<{ success: boolean; newPath?: string; error?: string }>;
+	updateProperties(path: string, props: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
+	addTags(path: string, tags: string[]): Promise<{ success: boolean; error?: string }>;
+	linkNotes(source: string, target: string, context?: string): Promise<{ success: boolean; error?: string }>;
+	// Copy notes (returns formatted content for clipboard)
+	copyNotes(paths: string[]): Promise<{ content: string; noteCount: number }>;
+	// Advanced vault reading (optional — controlled by tool toggles)
+	getProperties?(path: string): Promise<Record<string, unknown> | null>;
+	getFileInfo?(path: string): Promise<FileInfo | null>;
+	findDeadLinks?(path?: string): Promise<DeadLinkResult[]>;
+	queryNotes?(filter: Record<string, unknown>, options: QueryOptions): Promise<QueryResult[]>;
+	// Destructive actions (optional — controlled by tool toggles)
+	deleteNote?(path: string): Promise<{ success: boolean; error?: string }>;
+	executeCommand?(commandId: string): Promise<{ success: boolean; error?: string }>;
+	listCommands?(): Promise<CommandInfo[]>;
+	// Meta
+	askUser(question: string, choices?: string[]): Promise<string>;
+	onProgress(event: AgentProgressEvent): void;
+}
+
+export interface AgentInput {
+	task: string;
+	currentFile?: { path: string; content: string };
+	vaultStats: { totalNotes: number; totalFolders: number; totalTags: number };
+	chatHistory: ChatMessage[];
+}
+
+export interface AgentResult {
 	success: boolean;
-	edits: EditInstruction[];   // Raw edits (not validated yet - validation needs vault)
 	summary: string;
-	tokenUsage?: TokenUsage;
+	editsProposed: EditInstruction[];
+	notesRead: string[];           // for copy-notes feature
+	notesCopied: string[];         // paths of notes collected via copy_notes tool
+	webSourcesUsed: WebSource[];
+	tokenUsage: { total: number; promptTokens: number; completionTokens: number; perRound: number[] };
+	iterationsUsed: number;
 	error?: string;
 }

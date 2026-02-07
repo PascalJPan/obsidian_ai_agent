@@ -15,7 +15,8 @@ export type LogCategory =
 	| 'EDIT'         // Edit insertion and resolution
 	| 'PARSE'        // Response parsing
 	| 'TOKEN_LIMIT'  // Token limit enforcement
-	| 'WEB_AGENT'    // Web Agent operations
+	| 'WEB_AGENT'    // Web search operations (within unified agent)
+	| 'AGENT'        // Unified Agent operations
 	| 'SECURITY';    // Security enforcement (excluded folder violations)
 
 export interface Logger {

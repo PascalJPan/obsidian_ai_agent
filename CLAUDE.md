@@ -1,122 +1,37 @@
 # ObsidianAgent - Developer Reference
 
 ## TODO
-
-### Completed
-- [x] Fix the "current note only" selection as other notes still receive edits even when it is clicked. Make it not prompt dependent (enforce in validation, not just AI instructions). **DONE**: Implemented `filterEditsByRules()` for hard enforcement.
-- [x] Modular architecture refactor - Split monolithic `main.ts` into focused modules
-- [x] **UI Polish** - Clear chat icon (eraser), pending edit widget styling, keyboard shortcuts
-- [x] **Token count display** - Show actual token usage and cost in chat messages
-- [x] **Debug output readability** - Debug mode now outputs readable JSON text instead of objects
-- [x] **JSON parse bug fix** - Fixed parsing failure when AI response content contained markdown code blocks
-- [x] **Context selection UI refactor** - Replaced radio buttons with link depth slider (0-3) and independent "Same Folder" checkbox. BFS traversal for multi-depth links where excluded folders act as walls.
-- [x] **Agentic mode exploration improvements** - Complete rewrite of context agent:
-  - Running selection approach (`update_selection` tool) instead of fallback scoring
-  - New tools: `search_keyword`, `search_task_relevant`, `get_links_recursive`
-  - Improved system prompt with multi-hop exploration guidance
-  - Default iterations increased to 3, slider range 2-5
-  - Parallel tool calls enabled for efficiency
-  - `agenticKeywordLimit` setting (3-20) for keyword search results
-- [x] **Token limit enforcement** - Renamed `tokenWarningThreshold` to `taskAgentTokenLimit`:
-  - Now a hard limit, not just a warning
-  - Removes notes by priority when limit exceeded (manual → semantic → folder → linked → current)
-  - Shows toast notification when notes are removed
-  - Minimum token limit validation (3000)
-- [x] **Default link depth** - Changed from 1 to 2
-- [x] **Live sync settings** - Settings changes now immediately update view sliders
-- [x] **Plugin rename** - Renamed from "AI Assistant" / "sample-plugin" to "ObsidianAgent" throughout codebase
-
-### Context Selection Improvements
-- [x] **Add notes individually** - Picker UI implemented for manually adding notes to context
-- [ ] Consider saved context presets/profiles
-
-### Future Enhancements
-- [ ] **Full Orchestrator Agent** - Meta-agent that routes tasks (partial: PipelineContext done)
-  - Owns chat history, sends only relevant context to each agent
-  - Classifies task type and selects which agents to run
-  - Enables multi-round orchestration (Web → Scout → Edit)
-- [ ] **Saved context presets** - Save/load context selection profiles
-
-### UI/UX Improvements
-- [x] **Move edit options to settings** - Moved edit rules toggle from chat tab to Obsidian settings panel
-
-### Agentic Mode Enhancements
-- [x] **Web Agent** - Modular web search pipeline phase (Scout → Web → Task)
-- [x] **View all note names** - `view_all_notes` tool lists all note names with alias/description from YAML frontmatter
-- [x] **Vault exploration tool** - `explore_vault` tool for listing folder contents or finding notes by tag
-- [x] **Open note capability** - `canNavigate` capability allows AI to open notes in new tabs via `open` position
-- [x] **Agentic iterations slider** - Increased max to 10, changed default to 5
-- [x] **Expected tokens display** - Shows max expected tokens in scout agent settings
-- [x] **Max notes to select** - Increased max from 20 to 50 (default stays at 20)
-- [x] **Edit rules defaults** - Changed defaults: scope=context, all capabilities enabled
-- [x] **Send button centering** - Centered send button vertically in chat input box
-- [x] **Scout agent tool configuration** - Settings UI for enabling/disabling individual scout tools
-- [x] **Vault tags visibility** - Checkbox for showing all vault tags to AI
-- [x] **Agent Toggle Buttons** - Replaced Focused/Agentic radio with 3 independent agent toggles (Scout, Web, Task):
-  - Each agent can be enabled/disabled independently
-  - All agents off → send button disabled
-  - Toggle states persist across sessions
-  - Default: Scout OFF, Web OFF, Task ON
-  - Copy button in Scout results to copy all selected note contents
-- [x] **Pipeline Context** - Task Agent now understands WHY notes were selected:
-  - `PipelineContext` object accumulates metadata across phases
-  - Scout metadata: per-note selection reason, semantic scores, keyword match types, link depths
-  - Web metadata: search queries attempted, evaluation reasoning
-  - Task Agent system prompt includes "Prior Agent Context" section
-- [x] **Scout Agent Enhancements**:
-  - New `list_all_tags` tool - Discover all tags in vault with counts
-  - New `ask_user` tool - Ask clarifying questions with pause/resume support
-  - New `record_finding` tool - Pass arbitrary data (tag lists, folder structures) to Task Agent
-  - Removed `recommendedMode` - Task Agent determines mode from task
-  - Added exploration summary tracking
-  - Improved prompts with "fetch before select" guidance
-- [x] **Unified Context Builder** - New `src/ai/contextBuilder.ts`:
-  - `buildUnifiedContext()` consolidates context building
-  - Per-note metadata annotations (semantic %, keyword match type)
-  - Token limit enforcement with priority-based removal
-- [x] **EditManager extraction** - New `src/edits/editManager.ts`:
-  - Handles pending edit blocks and resolution (accept/reject)
-  - Manages edit insertion, batch processing, and new file creation
-  - Uses dependency injection for vault, logger, and settings access
-- [x] **No active file support** - Pipeline can now run without an active file open:
-  - Scout Agent does vault-wide exploration when no file is open
-  - Web-only queries work with empty context
-  - Task Agent can answer pure AI questions without vault context
-  - All file references made optional (`TFile | null`) throughout pipeline
-- [x] **Last iteration tool restriction** - Scout Agent forced to finalize on last round:
-  - On final iteration, only `update_selection` tool is available
-  - Warning message injected before last round
-  - Prevents wasteful exploration when time is up
-  - Progress shows "(FINAL)" on last round
-- [x] **Scout selection flexibility** - Agent can now select fewer notes:
-  - Minimum `maxNotes` changed from 3 to 1
-  - Current note no longer auto-prepended to selection
-  - System prompt updated: include current note only if relevant
-  - Respects user requests for specific note counts
+- [ ] **Saved context presets** — save/load context selection profiles
 
 ## Architecture Overview
 
-This is an Obsidian plugin that provides an agentic AI assistant for note editing and answering questions. It uses OpenAI's API (configurable model) and implements a pending edit system where AI-proposed changes are inserted as reviewable blocks.
+This is an Obsidian plugin that provides an AI assistant for note editing and answering questions. It uses OpenAI's API (configurable model) and implements a pending edit system where AI-proposed changes are inserted as reviewable blocks.
 
-## Key Concepts
+### Unified Agent
 
-### Agent Toggles (`AgentToggles`)
-Three independent agent toggles control the execution pipeline:
-- **Scout Agent** (`scout`): Explores vault to find relevant context. When OFF, uses manual context selection.
-- **Web Agent** (`web`): Searches the web for external information.
-- **Task Agent** (`task`): Executes the actual task (answer questions or propose edits).
+A single agent with a ReAct (Think → Act → Observe) loop explores the vault, searches the web, and takes actions in one unified loop. Replaces the previous 3-phase pipeline (Scout → Web → Task). The agent has **25 tools** across 3 categories:
 
-Default: Scout OFF, Web OFF, Task ON. At least one agent must be enabled to send a message.
+- **Vault tools** (11): `search_vault`, `read_note`, `list_notes`, `get_links`, `explore_structure`, `list_tags`, `get_manual_context`, `get_properties`, `get_file_info`, `find_dead_links`, `query_notes`
+- **Web tools** (2): `web_search`, `read_webpage` (only if search API is configured)
+- **Action tools** (12): `edit_note`, `create_note`, `open_note`, `move_note`, `update_properties`, `add_tags`, `link_notes`, `copy_notes`, `delete_note`, `execute_command`, `done`, `ask_user`
+
+**Tool control:**
+- `disabledTools: string[]` — single source of truth for which tools are off
+- `done` and `ask_user` are always protected (cannot be disabled)
+- Default disabled: `['delete_note', 'execute_command']`
+- Settings UI uses pill toggles in 4 groups (Vault, Web, Action, Advanced)
+
+**Runaway protection:**
+- Hard iteration cap (`agentMaxIterations`, 5-20, default 10)
+- Total token budget (`agentMaxTokens`, default 100,000)
+- Final round: only `done` + action tools available
+- Stuck detection: same tool+args 3x → warning + force finalization
+- Cancel button: aborts via AbortSignal after current round
 
 ### Scopes
-- **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as context
-  - `linkDepth` (0-3): Controls how many hops of links to follow
-    - 0: Current note only
-    - 1: Direct links (outgoing + backlinks)
-    - 2-3: Links of links (BFS traversal)
-  - `includeSameFolder`: Additive checkbox to include all notes in same folder
+- **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as manual context
+  - `linkDepth` (0-3): How many hops of links to follow
   - Excluded folders act as **walls**: files in them are excluded AND their links are not followed
-  - Legacy `ContextScope` type still supported for backwards compatibility
 
 - **Editable Scope** (`EditableScope`): Which notes AI is allowed to edit
   - `current`: Only current note
@@ -126,12 +41,18 @@ Default: Scout OFF, Web OFF, Task ON. At least one agent must be enabled to send
 ### Capabilities (`AICapabilities`)
 - `canAdd`: Allow line insertions
 - `canDelete`: Allow replacements and deletions
-- `canCreate`: Allow new file creation
-- `canNavigate`: Allow opening notes in new tabs (executes immediately, not as pending edit)
+- `canCreate`: Allow new file creation (derived from `disabledTools`)
+- `canNavigate`: Allow opening notes in new tabs (derived from `disabledTools`)
 
 ### Settings (`MyPluginSettings`)
-- `aiModel`: OpenAI model to use (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, etc.)
-- `chatHistoryLength`: Number of previous messages to include (0-100, default 10)
+- `aiModel`: OpenAI model (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, etc.)
+- `agentMaxIterations`: Max think-act-observe rounds (5-20, default 10)
+- `agentMaxTokens`: Total token budget (default 100,000)
+- `chatHistoryLength`: Previous messages to include (0-100, default 10)
+- `disabledTools`: Tools turned off by user
+- `whitelistedCommands`: Commands the agent can execute
+- Web search API settings (openai, serper, brave, tavily)
+- Edit rules (scope, capabilities)
 
 ## Core Data Structures
 
@@ -148,91 +69,86 @@ Wraps EditInstruction with resolved file, current/new content, and error state.
 { id: string, type: 'replace'|'add'|'delete', before: string, after: string }
 ```
 
-## Position Types
-- `start` / `end` - Beginning/end of file
-- `after:## Heading` - After a specific heading
-- `insert:N` - Insert before line N
-- `replace:N` or `replace:N-M` - Replace line(s)
-- `delete:N` or `delete:N-M` - Delete line(s)
-- `create` - Create new file
-- `open` - Open note in new tab (navigation, no content change)
-
-## Key Methods
-
-### main.ts (Obsidian integration, state management)
-
-**MyPlugin**
-- `insertEditBlocks()` - Batches edits by file, processes bottom-to-top to prevent line shift issues
-- `applyEditBlockToContent()` - Applies edit block to content string in memory
-- `resolveEdit()` - Accepts/rejects a pending edit
-- `validateEdits()` - Validates AI instructions, resolves files, computes new content
-- `filterEditsByRulesWithConfig()` - **HARD ENFORCEMENT**: Validates edits against capabilities and editable scope
-- `getEditableFilesWithConfig()` - Returns set of file paths allowed for editing based on scope config
-- `buildContextWithScopeConfig()` - Builds context string with line numbers using new config
-- `getLinkedFilesBFS()` - BFS traversal for multi-depth link resolution (excluded folders = walls)
-- `getSameFolderFiles()` - Gets all non-excluded files in same folder
-
-**AIAssistantView**
-- `handleEditModeWithWebSourcesAndContext()` - Orchestrates Task Agent: calls agent → validates → filters → inserts blocks
-- `buildMessagesWithHistory()` - Builds API messages array with rich chat history context
-
-### src/modals/index.ts (UI components)
-- `TokenWarningModal` - Warns about high token counts
-- `PendingEditsModal` - Shows pending edits across files
-- `ContextPreviewModal` - Previews context notes before sending
-- `NotePickerModal` - Fuzzy picker for adding notes to context
-- `EditPreviewModal` - Preview and select edits before applying (reserved for batch preview)
-
-### src/ai/prompts.ts (pure functions)
-- `buildScopeInstruction()` - Generates scope rules text
-- `buildPositionTypes()` - Generates position types based on capabilities
-- `buildEditRules()` - Generates general edit rules
-- `buildForbiddenActions()` - Generates explicit warnings for disabled capabilities
-
-### src/ai/taskAgent.ts (Task Agent)
-- `runTaskAgent()` - Main entry point for Phase 3 (answer or edit)
-- `buildTaskAgentSystemPrompt()` - Constructs system prompt with dynamic rules
-- `buildMessagesFromHistory()` - Builds messages array with chat history
-- `parseAIEditResponse()` - Parses JSON response from AI
-
-### src/ai/validation.ts (pure functions)
-- `computeNewContent()` - Applies position-based edit to content string
-- `determineEditType()` - Infers edit type (add/replace/delete) from position
-- `escapeRegex()` - Escapes special regex characters
-
-### src/ai/context.ts (pure functions)
-- `addLineNumbers()` - Prepends line numbers to content
-
-### src/edits/diff.ts (pure functions)
-- `computeDiff()` - Computes line-by-line diff between two strings
-- `longestCommonSubsequence()` - LCS algorithm for diff computation
-
-## Chat History & AI Memory
-
-When `chatHistoryLength > 0`, the AI receives rich context about previous interactions:
-
-### ChatMessage Extended Fields
+### AgentConfig
 ```typescript
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: Date;
-  activeFile?: string;           // Which file user was viewing
-  proposedEdits?: EditInstruction[];  // Edits AI proposed
-  editResults?: {                // What succeeded/failed
-    success: number;
-    failed: number;
-    failures: Array<{ file: string; error: string }>;
-  };
+interface AgentConfig {
+  model: string; apiKey: string;
+  capabilities: AICapabilities; editableScope: EditableScope;
+  maxIterations: number;  // 5-20, default 10
+  maxTotalTokens: number; // token budget across all rounds
+  webEnabled: boolean;
+  disabledTools: string[];
+  whitelistedCommands: WhitelistedCommand[];
+  customPrompts?: { character?: string };
+  chatHistoryLength: number; debugMode: boolean;
 }
 ```
 
-### What AI Knows From History
-- Which file the user was viewing for each message
-- Exactly what edits it proposed (file, position, content)
-- What succeeded and what failed with specific error messages
-- How pending edit blocks look (can modify its own pending edits)
+### AgentCallbacks
+Bridges pure agent logic to Obsidian APIs:
+- **Vault reading**: `readNote`, `searchKeyword`, `searchSemantic`, `listNotes`, `getLinks`, `exploreStructure`, `listTags`, `getAllNotes`, `getManualContext`, `getProperties`, `getFileInfo`, `findDeadLinks`, `queryNotes`
+- **Web**: `webSearch?`, `fetchPage?`
+- **Actions**: `proposeEdit`, `createNote`, `openNote`, `moveNote`, `updateProperties`, `addTags`, `linkNotes`, `copyNotes`, `deleteNote`, `executeCommand`
+- **Meta**: `askUser` (Promise-based pause — blocks the loop until user responds), `onProgress`
+
+### AgentResult
+```typescript
+interface AgentResult {
+  success: boolean; summary: string;
+  editsProposed: EditInstruction[]; notesRead: string[];
+  notesCopied: string[];
+  webSourcesUsed: WebSource[];
+  tokenUsage: { total: number; promptTokens: number; completionTokens: number; perRound: number[] };
+  iterationsUsed: number;
+  error?: string;
+}
+```
+
+## Position Types
+- `start` / `end` — beginning/end of file
+- `after:## Heading` — after a specific heading
+- `insert:N` — insert before line N
+- `replace:N` or `replace:N-M` — replace line(s)
+- `delete:N` or `delete:N-M` — delete line(s)
+- `create` — create new file
+- `open` — open note in new tab (navigation, no content change)
+
+## Key Methods
+
+### main.ts (Obsidian integration, ~4,500 lines)
+
+**MyPlugin**
+- `validateEdits()` — validates AI instructions, resolves files, computes new content
+- `filterEditsByRulesWithConfig()` — **HARD ENFORCEMENT** of capabilities and editable scope
+- `buildContextWithScopeConfig()` — builds manual context string with line numbers
+- `getLinkedFilesBFS()` — BFS traversal for multi-depth link resolution
+
+**AIAssistantView**
+- `runAgentLoop()` — creates config, calls `runAgent()`, displays results
+- `buildAgentCallbacks()` — bridges all 25 agent callbacks to Obsidian APIs
+- `showUserClarificationUI()` — Promise-based UI for `ask_user` tool
+- `showAgentProgress()` — real-time progress display during agent execution
+- `completeAgentProgressFromResult()` — renders detail sections (notes, web, edits) in the progress container
+- `renderPendingDeletionBubble()` — confirmation UI for `delete_note` (Accept/Reject)
+- `renderCopyNotesBubble()` — copy-to-clipboard UI for `copy_notes`
+
+### src/ai/agent.ts
+- `runAgent()` — main ReAct loop engine, dispatches tool calls, tracks tokens
+- `ask_user` pauses the loop via Promise (callbacks.askUser) rather than returning early
+
+### src/ai/tools/
+- `handleVaultToolCall()` — dispatches vault tool calls via callbacks
+- `handleWebToolCall()` — dispatches web tool calls via callbacks
+- `handleActionToolCall()` — dispatches action tool calls; `ask_user` calls `callbacks.askUser()` directly, `done` signals completion
+
+### src/ai/prompts/
+- `buildAgentSystemPrompt()` — builds system prompt with vault language, tools, scope rules
+- `buildScopeInstruction()` / `buildEditRules()` / `buildForbiddenActions()` — reused from taskPrompts
+- `buildMessagesFromHistory()` — chat history with rich edit context
+
+### src/ai/validation.ts
+- `computeNewContent()` — applies position-based edit to content string
+- `determineEditType()` — infers edit type from position
 
 ## Hard Enforcement System
 
@@ -254,147 +170,72 @@ Edit blocks are stored as fenced code blocks in notes:
 
 Users see a widget with Accept/Reject buttons. The tag (`#ai_edit`) enables searchability.
 
+## Deletion Confirmation
+
+When the agent calls `delete_note`, the file is NOT immediately trashed. Instead a confirmation bubble appears in the chat with "Keep" and "Delete" buttons. The file is only moved to `.trash` when the user clicks Delete.
+
+## Chat UX
+
+- **User messages**: text wrapped in `<span>` for proper selection in Electron
+- **Typing while loading**: textarea stays enabled during agent execution; submit is blocked until agent completes
+- **Detail toggles** (notes accessed, web sources, edits): rendered inside the agent progress container ("Agent complete" box), not in the response bubble
+- **Manual context toggle**: smaller font (0.75em) in the bottom section
+
 ## Build Commands
 ```bash
 npm run dev    # Watch mode
-npm run build  # Production build
+npm run build  # Production build (tsc + esbuild)
 ```
 
 ## File Structure
 ```
-main.ts              - Entry point, plugin lifecycle, UI classes (~4,900 lines)
+main.ts              - Entry point, plugin lifecycle, UI, callbacks (~4,500 lines)
 src/
-  types.ts           - Shared type definitions (PipelineContext, NoteSelectionMetadata, etc.)
+  types.ts           - Shared type definitions
   ai/
-    context.ts       - Context utilities (addLineNumbers)
-    contextBuilder.ts - Unified context builder with metadata annotations
-    contextAgent.ts  - Agentic mode Phase 1: vault exploration agent (Scout Agent)
-    webAgent.ts      - Agentic mode Phase 2: web research agent (Web Agent)
-    taskAgent.ts     - Agentic mode Phase 3: answer/edit execution (Task Agent)
-    searchApi.ts     - Search API wrapper (OpenAI, Serper, Brave, Tavily) + page fetcher
-    prompts.ts       - Prompt constants and builders
-    validation.ts    - Edit validation (computeNewContent, determineEditType, escapeRegex)
+    agent.ts         - Unified Agent ReAct loop engine
+    tools/
+      vaultTools.ts  - 11 vault exploration tools
+      webTools.ts    - 2 web search tools
+      actionTools.ts - 12 action tools (edit, create, move, delete, execute, etc.)
+    prompts/
+      agentPrompts.ts - Agent system prompt builder
+      taskPrompts.ts  - Edit rules, scope, position types (reused by agent)
+      chatHistory.ts  - Chat history message builder
+      index.ts        - Barrel file, shared constants
+    context.ts       - Context utilities (addLineNumbers, stripPendingEditBlocks)
+    validation.ts    - Edit validation (computeNewContent, determineEditType)
+    searchApi.ts     - Web search wrapper (OpenAI, Serper, Brave, Tavily)
     semantic.ts      - Embedding generation and semantic search
+    pricing.ts       - Token usage formatting
   edits/
-    diff.ts          - Diff utilities (computeDiff, longestCommonSubsequence)
-    editManager.ts   - Edit lifecycle management (create/resolve/batch edit blocks)
+    editManager.ts   - Edit lifecycle management (create/resolve/batch)
+    diff.ts          - Diff utilities (computeDiff, LCS)
   modals/
-    index.ts         - Modal components (TokenWarningModal, PendingEditsModal, ContextPreviewModal, NotePickerModal, EditPreviewModal)
+    index.ts         - Modal components (TokenWarning, PendingEdits, ContextPreview, NotePicker)
   utils/
-    logger.ts        - Structured logging utility with category-based output
+    logger.ts        - Structured logging with categories
+    fileUtils.ts     - File exclusion utilities
 styles.css           - Widget and view styling
 manifest.json        - Plugin metadata
 ```
 
-## Agentic Mode (Context Agent)
+## Chat History & AI Memory
 
-The agentic mode uses a two-phase approach:
+When `chatHistoryLength > 0`, the AI receives rich context about previous interactions:
 
-### Phase 1: Context Agent (`contextAgent.ts`)
-An AI agent that explores the vault to find relevant notes for the user's task.
-
-**Tools available to the agent:**
-- `update_selection` - Maintains running selection with reasoning + confidence level
-- `list_notes` - List notes with previews (filterable by folder)
-- `search_keyword` - Fast keyword search with priority: title > heading > content (tracks match types)
-- `search_semantic` - Embedding-based semantic similarity search (tracks scores)
-- `search_task_relevant` - Task-aware semantic search (combines task + current note context)
-- `fetch_note` - Get full content of a specific note
-- `get_links` - Get direct links (in/out/both) from a note
-- `get_links_recursive` - BFS traversal for multi-hop link exploration (depth 1-3, tracks depths)
-- `view_all_notes` - List ALL note names with aliases/descriptions from YAML frontmatter
-- `explore_vault` - Explore vault structure: list folder contents or find notes by tag
-- `list_all_tags` - List all tags in vault with note counts
-- `ask_user` - Ask clarifying questions (pauses execution, resumes after user response)
-- `record_finding` - Record data findings (tag lists, folder structures) to pass to Task Agent
-
-**Running Selection Pattern:**
-- Agent calls `update_selection()` after each exploration step
-- Selection includes: selectedPaths, reasoning, confidence ('exploring'|'confident'|'done')
-- If agent sets confidence: 'done', exploration ends early
-- On final iteration: only `update_selection` tool available (forces finalization)
-- On timeout: uses the last selection (never falls back to arbitrary scoring)
-- Current note NOT auto-included - agent decides based on relevance
-- Metadata tracked: semantic scores, keyword match types, link depths per note
-
-**Settings:**
-- `agenticMaxIterations` (2-5, default 3): Max exploration rounds
-- `agenticMaxNotes` (1-50, default 10): Max notes to select
-- `agenticKeywordLimit` (3-20, default 10): Max keyword search results
-- `agenticScoutModel`: Model for exploration (default: same as main model)
-
-### Phase 2: Web Agent (`webAgent.ts`)
-An optional AI agent that searches the web for external information when vault context is insufficient.
-
-**Flow:**
-1. EVALUATE: Determine if vault context can fully answer the task
-2. FORMULATE: Create optimized search query
-3. SEARCH: Get search results from API (OpenAI, Serper, Brave, or Tavily)
-4. SELECT: Choose which URLs to fetch in full
-5. FETCH: Get full page content with token budget
-6. EXTRACT: Pull relevant information
-
-**Tools available to the agent:**
-- `evaluate_context` - Determine if vault context is sufficient or web search needed
-- `web_search` - Search the web using configured API
-- `select_pages` - Choose which search results to fetch in full
-- `finalize_web_context` - Complete research and compile findings
-
-**Settings:**
-- `webAgentEnabled`: Master toggle (default: false, opt-in)
-- `webAgentSearchApi`: Which search API to use (openai, serper, brave, tavily)
-- `webAgentSearchApiKey`: API key for search service (not needed for OpenAI - uses main API key)
-- `webAgentSnippetLimit` (3-15, default 8): Max search results
-- `webAgentFetchLimit` (1-5, default 3): Max pages to fetch in full
-- `webAgentTokenBudget` (2000-20000, default 8000): Max tokens for web content
-- `webAgentAutoSearch`: Automatically search when needed (default: true)
-
-### Phase 3: Task Agent (`taskAgent.ts`)
-Uses the context gathered in Phase 1 and 2 to execute the actual task.
-
-**Entry Function:**
 ```typescript
-export async function runTaskAgent(
-  input: TaskAgentInput,
-  config: TaskAgentConfig,
-  logger?: Logger,
-  onProgress?: (event: AgentProgressEvent) => void
-): Promise<TaskAgentResult>
-```
-
-**Input:** Task string, context (formatted notes), chat history, optional web sources, pipeline context
-**Output:** Success flag, edits array (if any), summary text, token usage
-
-**Behavior:**
-- Builds system prompt with capabilities and scope rules
-- Includes "Prior Agent Context" section from PipelineContext:
-  - Scout: confidence, reasoning, high-relevance notes with scores
-  - Web: search queries, evaluation reasoning
-- Includes chat history for multi-turn conversations
-- Calls OpenAI API with JSON response format
-- Returns structured result for validation/insertion by main.ts
-
-The Task Agent decides whether to answer a question (empty edits) or propose changes (edits array) based on the user's request.
-
-### Pipeline Context (`PipelineContext`)
-Accumulates metadata across phases for Task Agent awareness:
-```typescript
-interface PipelineContext {
-  scout?: {
-    selectedNotes: NoteSelectionMetadata[];  // Per-note metadata
-    reasoning: string;
-    confidence: 'exploring' | 'confident' | 'done';
-    explorationSummary: string;
-    findings: ScoutFinding[];  // Data findings passed to Task Agent
-    tokensUsed: number;
-  };
-  web?: {
-    searchPerformed: boolean;
-    evaluationReasoning?: string;
-    searchQueries: string[];
-    sources: EnhancedWebSource[];
-    tokensUsed: number;
-  };
-  tokenAccounting: { scoutTokens, webTokens, taskTokens, totalTokens };
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: Date;
+  type?: 'message' | 'context-switch';
+  activeFile?: string;
+  proposedEdits?: EditInstruction[];
+  editResults?: { success: number; failed: number; failures: Array<{ file: string; error: string }> };
+  tokenUsage?: TokenUsage;
+  model?: string;
+  webSources?: WebSource[];
 }
 ```

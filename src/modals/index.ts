@@ -127,8 +127,6 @@ export class ContextPreviewModal extends Modal {
 		const { contentEl } = this;
 		contentEl.addClass('context-preview-modal');
 
-		contentEl.createEl('h2', { text: 'Context Notes' });
-
 		const totalNotes = 1 + this.contextInfo.linkedNotes.length +
 			this.contextInfo.folderNotes.length + this.contextInfo.semanticNotes.length +
 			this.contextInfo.manualNotes.length;
