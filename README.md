@@ -15,47 +15,68 @@ Think of it as a collaborator that:
 
 ## How It Works
 
-ObsidianAgent runs a pipeline of three agents, each handling a different phase of your request:
+ObsidianAgent runs a single unified agent with a **ReAct loop** (Think → Act → Observe). Instead of a rigid pipeline, one agent autonomously decides what to do at each step—exploring your vault, searching the web, and taking actions—all in one adaptive loop. This replaces the previous 3-phase pipeline (Scout → Web → Task) with a single, more flexible agent.
 
-### Scout Agent
-Explores your vault autonomously to find the best context for your task. Uses keyword search, semantic search, link traversal, and vault exploration to select the most relevant notes—so you don't have to pick them manually.
+The agent has **25 tools** across 3 categories:
 
-Scout tools include:
-- `view_all_notes` — Bird's-eye view of your entire vault with aliases/descriptions from YAML frontmatter
-- `explore_vault` — List folder contents or find notes by tag
-- `list_all_tags` — Discover all tags in your vault with counts
-- `search_keyword` / `search_semantic` — Find notes by keyword or meaning
-- `get_links_recursive` — Multi-hop link traversal to explore note connections
-- `ask_user` — Ask clarifying questions when the task is ambiguous
+**Vault Tools (11)** — explore and understand your vault
+- `search_vault` — keyword, semantic, or combined search
+- `read_note` — read a note's full content with line numbers
+- `list_notes` — browse notes in a folder
+- `get_links` — follow outgoing links and backlinks
+- `explore_structure` — inspect vault folder structure and tags
+- `list_tags` — discover all tags with usage counts
+- `get_manual_context` — access manually selected context notes
+- `get_properties` — read YAML frontmatter properties
+- `get_file_info` — get file metadata (size, dates, etc.)
+- `find_dead_links` — detect broken wikilinks
+- `query_notes` — advanced note filtering with sorting
 
-Shows live progress of exploration with a collapsible action log.
+**Web Tools (2)** — search beyond your vault
+- `web_search` — search the internet (OpenAI, Serper, Brave, or Tavily)
+- `read_webpage` — fetch and extract content from a URL
 
-### Web Agent
-When your vault context isn't enough, the Web Agent searches the internet for external information. It evaluates whether a web search is needed, formulates queries, fetches relevant pages, and extracts the useful parts—all automatically.
+**Action Tools (12)** — make changes and interact
+- `edit_note` — propose line-level edits (insert, replace, delete)
+- `create_note` — create a new note
+- `open_note` — open a note in a new tab
+- `move_note` — move or rename a note
+- `update_properties` — modify YAML frontmatter
+- `add_tags` — add tags to a note
+- `link_notes` — insert a wikilink between notes
+- `copy_notes` — collect note contents for clipboard
+- `delete_note` — propose note deletion (requires user confirmation)
+- `execute_command` — run whitelisted Obsidian commands
+- `ask_user` — ask a clarifying question
+- `done` — finish and deliver results
 
-Supports multiple search APIs (OpenAI, Serper, Brave, Tavily).
-
-### Task Agent
-Executes your actual request using the context gathered by the Scout and Web agents. It can answer questions, propose edits, create new notes, or open existing notes—depending on what you asked for.
-
-The Task Agent is aware of *why* each note was selected (semantic relevance, keyword match, link depth) and what the Web Agent found, so it can make informed decisions.
+**Safety guardrails:**
+- Hard iteration cap (5-20 rounds, default 10)
+- Total token budget (default 100,000)
+- Stuck detection: repeating the same tool call 3x triggers a warning and forced finalization
+- Cancel button: aborts after the current round via AbortSignal
+- Destructive tools (`delete_note`, `execute_command`) disabled by default
 
 ### Manual Context Selection
-If you prefer to choose context yourself, you can turn off the Scout Agent and configure context manually:
+If you prefer to choose context yourself, you can configure it manually:
 - Link depth slider (0-3): control how many hops of links to include
-- Optional: include all notes in the same folder
 - Add individual notes via a picker
 - Excluded folders act as walls—blocks traversal, not just exclusion
-
-Each agent can be toggled on or off independently. At minimum, one agent must be enabled.
 
 ## Key Features
 
 **Granular Permissions**
 - Control which notes the AI can edit (current note, linked notes, or all context notes)
 - Toggle capabilities: add content, delete/replace, create new notes, open notes in new tabs
+- Enable/disable individual tools via pill toggles in settings
 - Exclude sensitive folders entirely
+- Whitelist specific Obsidian commands the agent can execute
 - **Hard enforcement**: Rules are validated after the AI responds, not just suggested via prompts
+
+**Safe Deletions**
+- When the agent requests to delete a note, a confirmation bubble appears in the chat
+- You must explicitly click "Delete" to confirm — clicking "Keep" cancels the operation
+- No note is ever trashed without your approval
 
 **Smart Token Management**
 - Set a token limit for context sent to the AI
@@ -65,7 +86,6 @@ Each agent can be toggled on or off independently. At minimum, one agent must be
 
 **Model Selection**
 - Choose your preferred OpenAI model (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, o1, etc.)
-- Separate model selection for the Scout Agent (use a cheaper model for exploration)
 - Balance cost, speed, and capability for your workflow
 
 **Conversation Memory**
@@ -74,11 +94,22 @@ Each agent can be toggled on or off independently. At minimum, one agent must be
 - Can refine or fix previous attempts based on feedback
 - Configurable history length (0-100 messages)
 
+**Interactive Clarification**
+- Agent can ask you questions mid-task with the `ask_user` tool
+- Questions appear as an interactive UI with optional choice buttons
+- The agent pauses, waits for your answer, then continues its work
+
 **Review Before Commit**
 - Every proposed edit appears as a reviewable block in your note
 - Accept or reject each change individually
 - Batch accept/reject all pending edits
 - AI can modify its own pending edits if you ask
+
+**Chat UX**
+- Type ahead while the agent is thinking — input stays active during execution
+- Select and copy text from any message (user or assistant)
+- Agent progress shows notes accessed, web sources, and edits in a collapsible container
+- Clickable wikilinks and tags in chat messages
 
 ## Getting Started
 
@@ -99,11 +130,37 @@ Build your knowledge base with an assistant that respects your agency.
 ## For Developers
 
 The plugin uses a modular architecture:
-- `src/ai/` — Agent implementations (Scout, Web, Task), prompt building, context utilities, validation
-- `src/edits/` — Edit lifecycle management and diff computation
-- `src/modals/` — UI components (token warnings, context preview, note picker, edit preview)
-- `src/utils/` — Structured logging
-- `src/types.ts` — Shared type definitions (PipelineContext, agent configs, etc.)
+
+```
+main.ts              - Entry point, plugin lifecycle, UI, callbacks (~4,500 lines)
+src/
+  types.ts           - Shared type definitions
+  ai/
+    agent.ts         - Unified Agent ReAct loop engine
+    tools/
+      vaultTools.ts  - 11 vault exploration tools
+      webTools.ts    - 2 web search tools
+      actionTools.ts - 12 action tools
+    prompts/
+      agentPrompts.ts - Agent system prompt builder
+      taskPrompts.ts  - Edit rules, scope, position types
+      chatHistory.ts  - Chat history message builder
+      index.ts        - Barrel file, shared constants
+    context.ts       - Context utilities
+    validation.ts    - Edit validation
+    searchApi.ts     - Web search wrapper (OpenAI, Serper, Brave, Tavily)
+    semantic.ts      - Embedding generation and semantic search
+    pricing.ts       - Token usage formatting
+  edits/
+    editManager.ts   - Edit lifecycle management
+    diff.ts          - Diff utilities
+  modals/
+    index.ts         - Modal components
+  utils/
+    logger.ts        - Structured logging
+    fileUtils.ts     - File exclusion utilities
+styles.css           - Widget and view styling
+```
 
 See `CLAUDE.md` for detailed developer documentation.
 

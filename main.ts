@@ -14,15 +14,13 @@
  */
 
 
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, requestUrl, ItemView, WorkspaceLeaf, MarkdownPostProcessorContext, MarkdownRenderer, setIcon } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, ItemView, WorkspaceLeaf, MarkdownPostProcessorContext, MarkdownRenderer, setIcon } from 'obsidian';
 
 // Import extracted modules
 import {
 	EditableScope,
-	AgentToggles,
 	AICapabilities,
 	EditInstruction,
-	AIEditResponse,
 	ValidatedEdit,
 	InlineEdit,
 	ChatMessage,
@@ -34,30 +32,22 @@ import {
 	ContextInfo,
 	NoteFrontmatter,
 	TokenLimitedContextResult,
-	// AgenticSubMode removed - scout agent decides mode automatically
-	AgenticModeConfig,
-	AgentProgressEvent,
-	ContextAgentResult,
-	ScoutToolConfig,
-	// Web Agent types
+	// Web types (still used for settings)
 	SearchApiType,
-	WebAgentSettings,
 	WebSource,
-	WebAgentResult,
-	WebAgentProgressEvent,
-	// Task Agent types
-	TaskAgentConfig,
-	TaskAgentInput,
-	TaskAgentResult,
-	// Pipeline types
-	PipelineContext,
-	NoteSelectionMetadata,
-	UserClarificationResponse,
-	ScoutFinding
+	// Agent types
+	AgentConfig,
+	AgentCallbacks,
+	AgentInput,
+	AgentResult,
+	AgentProgressEvent,
+	KeywordResult,
+	SemanticSearchResult,
+	NotePreview,
+	LinkInfo,
+	WhitelistedCommand
 } from './src/types';
-import { runContextAgent, continueContextAgent } from './src/ai/contextAgent';
-import { runWebAgent, WebAgentConfig } from './src/ai/webAgent';
-import { runTaskAgent } from './src/ai/taskAgent';
+import { runAgent } from './src/ai/agent';
 import {
 	generateEmbedding,
 	searchSemantic,
@@ -66,11 +56,7 @@ import {
 	saveEmbeddingIndex
 } from './src/ai/semantic';
 import {
-	MINIMUM_TOKEN_LIMIT,
 	buildTaskAgentSystemPrompt,
-	buildMessagesFromHistory,
-	formatWebContextForPrompt,
-	buildScoutFindingsBlock,
 	CONTEXT_TASK_HEADER,
 	CONTEXT_TASK_FOOTER,
 	CONTEXT_DATA_HEADER,
@@ -79,6 +65,8 @@ import {
 import { addLineNumbers, stripPendingEditBlocks } from './src/ai/context';
 import { computeNewContent } from './src/ai/validation';
 import { formatTokenUsage } from './src/ai/pricing';
+import { webSearch, fetchPage } from './src/ai/searchApi';
+import { isFileExcluded, isFolderExcluded } from './src/utils/fileUtils';
 import { createLogger, summarizeSet, Logger } from './src/utils/logger';
 import {
 	TokenWarningModal,
@@ -94,10 +82,8 @@ const AI_ASSISTANT_VIEW_TYPE = 'ai-assistant-view';
 // Settings interface
 interface MyPluginSettings {
 	openaiApiKey: string;
-	aiModel: string;                // 'gpt-4o-mini' | 'gpt-4o' | 'gpt-4-turbo' | 'gpt-4' | 'gpt-5' | 'o1-mini' | 'o1'
-	customPromptCharacter: string;  // Shared across all modes (personality/tone)
-	customPromptEdit: string;       // Edit mode specific preferences
-	taskAgentTokenLimit: number;   // Hard limit - notes removed if exceeded
+	aiModel: string;                // 'gpt-5-mini' | 'gpt-5-nano' | 'gpt-5' | 'gpt-4o' etc.
+	customInstructions: string;     // Custom instructions (personality, tone, edit preferences)
 	pendingEditTag: string;
 	excludedFolders: string[];
 	chatHistoryLength: number;      // Number of previous messages to include (0-100)
@@ -106,14 +92,17 @@ interface MyPluginSettings {
 	showTokenUsage: boolean;        // Show token count and cost estimate in chat
 	// Semantic search settings
 	embeddingModel: 'text-embedding-3-small' | 'text-embedding-3-large';
-	// Agentic mode settings
-	agenticScoutModel: string;      // Model for Phase 1 exploration ('same' or specific model)
-	agenticMaxIterations: number;   // 2-5, max tool-calling rounds
-	agenticMaxNotes: number;        // 3-20, max notes context agent can select
-	agenticKeywordLimit: number;    // 3-20, max results for keyword search
-	agenticMaxTokensPerIteration: number; // Max tokens per scout iteration
-	// Default context scope settings (used to initialize view sliders)
-	defaultLinkDepth: number;              // 0-3, default 1
+	// Agent settings
+	agentMaxIterations: number;     // 5-20, max ReAct loop rounds
+	agentMaxTokens: number;         // Total token budget across all rounds
+	// Web search settings
+	webAgentSearchApi: SearchApiType;      // 'openai' | 'serper' | 'brave' | 'tavily'
+	webAgentSearchApiKey: string;          // API key for search service
+	webAgentSnippetLimit: number;          // Max search results (default: 8)
+	webAgentFetchLimit: number;            // Max pages to fetch in full (default: 3)
+	webAgentTokenBudget: number;           // Max tokens for web content (default: 8000)
+	// Default context scope settings (used to initialize view sliders for manual context)
+	defaultLinkDepth: number;              // 0-3, default 2
 	defaultMaxLinkedNotes: number;         // 0-50, default 20
 	defaultMaxFolderNotes: number;         // 0-20, default 0
 	defaultSemanticMatchCount: number;     // 0-20, default 0
@@ -122,41 +111,14 @@ interface MyPluginSettings {
 	defaultEditableScope: EditableScope;   // 'current' | 'linked' | 'context'
 	defaultCanAdd: boolean;
 	defaultCanDelete: boolean;
-	defaultCanCreate: boolean;
-	defaultCanNavigate: boolean;           // Can open notes in new tabs
-	// Scout agent tool configuration
-	scoutToolListNotes: boolean;
-	scoutToolSearchKeyword: boolean;
-	scoutToolSearchSemantic: boolean;
-	scoutToolSearchTaskRelevant: boolean;
-	scoutToolGetLinks: boolean;
-	scoutToolGetLinksRecursive: boolean;
-	scoutToolViewAllNotes: boolean;        // View all note names with frontmatter
-	scoutToolExploreVault: boolean;        // Explore folders and tags
-	scoutToolListAllTags: boolean;         // List all tags in vault
-	scoutToolAskUser: boolean;             // Ask user clarifying questions
-	scoutSemanticLimit: number;            // Max results for semantic search
-	scoutListNotesLimit: number;           // Max results for list_notes
-	scoutShowTokenBudget: boolean;         // Show token budget in scout prompts
-	// Web Agent settings
-	webAgentSearchApi: SearchApiType;      // 'serper' | 'brave' | 'tavily'
-	webAgentSearchApiKey: string;          // API key for search service
-	webAgentSnippetLimit: number;          // Max search results (default: 8)
-	webAgentFetchLimit: number;            // Max pages to fetch in full (default: 3)
-	webAgentTokenBudget: number;           // Max tokens for web content (default: 8000)
-	webAgentAutoSearch: boolean;           // Automatically search when needed (default: true)
-	webAgentMinFetchPages: number;         // Minimum pages to fetch (1-3, default: 1)
-	webAgentMaxQueryRetries: number;       // Max query reformulation retries (0-2, default: 1)
-	// Agent toggle states (persisted)
-	agentToggles: AgentToggles;            // Which agents are enabled
+	disabledTools: string[];               // Agent tool names disabled by user (includes advanced tools)
+	whitelistedCommands: WhitelistedCommand[]; // Commands the agent is allowed to execute
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
 	openaiApiKey: '',
 	aiModel: 'gpt-5-mini',
-	customPromptCharacter: '',
-	customPromptEdit: '',
-	taskAgentTokenLimit: 10000,
+	customInstructions: '',
 	pendingEditTag: '#ai_edit',
 	excludedFolders: [],
 	chatHistoryLength: 10,
@@ -164,11 +126,15 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	clearChatOnNoteSwitch: false,
 	showTokenUsage: false,
 	embeddingModel: 'text-embedding-3-small',
-	agenticScoutModel: 'same',
-	agenticMaxIterations: 5,
-	agenticMaxNotes: 10,
-	agenticKeywordLimit: 10,
-	agenticMaxTokensPerIteration: 10000,
+	// Agent settings
+	agentMaxIterations: 10,
+	agentMaxTokens: 100000,
+	// Web search settings
+	webAgentSearchApi: 'openai',
+	webAgentSearchApiKey: '',
+	webAgentSnippetLimit: 8,
+	webAgentFetchLimit: 3,
+	webAgentTokenBudget: 8000,
 	// Default context scope settings
 	defaultLinkDepth: 2,
 	defaultMaxLinkedNotes: 20,
@@ -179,33 +145,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	defaultEditableScope: 'context',
 	defaultCanAdd: true,
 	defaultCanDelete: true,
-	defaultCanCreate: true,
-	defaultCanNavigate: true,
-	// Scout agent tool configuration - all enabled by default
-	scoutToolListNotes: true,
-	scoutToolSearchKeyword: true,
-	scoutToolSearchSemantic: true,
-	scoutToolSearchTaskRelevant: true,
-	scoutToolGetLinks: true,
-	scoutToolGetLinksRecursive: true,
-	scoutToolViewAllNotes: true,
-	scoutToolExploreVault: true,
-	scoutToolListAllTags: true,
-	scoutToolAskUser: true,
-	scoutSemanticLimit: 10,
-	scoutListNotesLimit: 30,
-	scoutShowTokenBudget: true,
-	// Web Agent settings
-	webAgentSearchApi: 'openai',
-	webAgentSearchApiKey: '',
-	webAgentSnippetLimit: 8,
-	webAgentFetchLimit: 3,
-	webAgentTokenBudget: 8000,
-	webAgentAutoSearch: true,
-	webAgentMinFetchPages: 1,
-	webAgentMaxQueryRetries: 1,
-	// Agent toggle defaults: Scout OFF, Web OFF, Task ON
-	agentToggles: { scout: false, web: false, task: true }
+	disabledTools: ['delete_note', 'execute_command'],
+	whitelistedCommands: []
 }
 
 // Type definitions now imported from src/types.ts
@@ -256,7 +197,8 @@ export default class MyPlugin extends Plugin {
 		// Load embedding index
 		this.embeddingIndex = await loadEmbeddingIndex(
 			this.app.vault,
-			'.obsidian/plugins/obsidian-agent'
+			'.obsidian/plugins/obsidian-agent',
+			this.logger
 		);
 
 		// Validate embedding index model matches settings
@@ -346,22 +288,81 @@ export default class MyPlugin extends Plugin {
 
 		// Migrate old settings if present
 		if (loaded) {
-			// Migrate old systemPrompt to customPromptQA (if not already migrated)
+			// Migrate old systemPrompt
 			if (loaded.systemPrompt && !loaded.customPromptQA) {
-				// Only migrate if it's not the old default
 				const oldDefault = 'You are an AI Agent in an Obsidian vault with the following task:';
 				if (loaded.systemPrompt !== oldDefault) {
 					loaded.customPromptQA = loaded.systemPrompt;
 				}
 			}
-			// Migrate tokenWarningThreshold to taskAgentTokenLimit
-			if (loaded.tokenWarningThreshold !== undefined && loaded.taskAgentTokenLimit === undefined) {
-				loaded.taskAgentTokenLimit = loaded.tokenWarningThreshold;
+			// Migrate old taskAgentTokenLimit to agentMaxTokens
+			if (loaded.taskAgentTokenLimit !== undefined && loaded.agentMaxTokens === undefined) {
+				loaded.agentMaxTokens = loaded.taskAgentTokenLimit * 10; // Scale up for agent loop
+			}
+			// Migrate old agenticMaxIterations to agentMaxIterations
+			if (loaded.agenticMaxIterations !== undefined && loaded.agentMaxIterations === undefined) {
+				loaded.agentMaxIterations = Math.min(loaded.agenticMaxIterations * 2, 20);
 			}
 			// Remove old settings
 			delete loaded.systemPrompt;
 			delete loaded.jsonEditSystemPrompt;
 			delete loaded.tokenWarningThreshold;
+			delete loaded.taskAgentTokenLimit;
+			delete loaded.agenticScoutModel;
+			delete loaded.agenticMaxIterations;
+			delete loaded.agenticMaxNotes;
+			delete loaded.agenticKeywordLimit;
+			delete loaded.agenticMaxTokensPerIteration;
+			delete loaded.scoutToolListNotes;
+			delete loaded.scoutToolSearchKeyword;
+			delete loaded.scoutToolSearchSemantic;
+			delete loaded.scoutToolSearchTaskRelevant;
+			delete loaded.scoutToolGetLinks;
+			delete loaded.scoutToolGetLinksRecursive;
+			delete loaded.scoutToolViewAllNotes;
+			delete loaded.scoutToolExploreVault;
+			delete loaded.scoutToolListAllTags;
+			delete loaded.scoutToolAskUser;
+			delete loaded.scoutSemanticLimit;
+			delete loaded.scoutListNotesLimit;
+			delete loaded.scoutShowTokenBudget;
+			delete loaded.webAgentAutoSearch;
+			delete loaded.webAgentMinFetchPages;
+			delete loaded.webAgentMaxQueryRetries;
+			delete loaded.agentToggles;
+			// Migrate old customPromptCharacter + customPromptEdit → customInstructions
+			if ((loaded.customPromptCharacter || loaded.customPromptEdit) && loaded.customInstructions === undefined) {
+				const parts = [loaded.customPromptCharacter, loaded.customPromptEdit].filter((s: string) => s?.trim());
+				loaded.customInstructions = parts.join('\n\n');
+			}
+			delete loaded.customPromptCharacter;
+			delete loaded.customPromptEdit;
+
+			// Migrate old toolToggles → disabledTools
+			if (loaded.toolToggles) {
+				const disabled = new Set<string>(loaded.disabledTools || []);
+				const tt = loaded.toolToggles;
+				if (tt.getProperties === false) disabled.add('get_properties');
+				if (tt.getFileInfo === false) disabled.add('get_file_info');
+				if (tt.findDeadLinks === false) disabled.add('find_dead_links');
+				if (tt.queryNotes === false) disabled.add('query_notes');
+				if (tt.manualContext === false) disabled.add('get_manual_context');
+				// Old default-OFF tools: only add to disabled if NOT explicitly true
+				if (tt.deleteNote !== true) disabled.add('delete_note');
+				if (tt.executeCommand !== true) disabled.add('execute_command');
+				loaded.disabledTools = [...disabled];
+				delete loaded.toolToggles;
+			}
+
+			// Migrate old defaultCanCreate/defaultCanNavigate → disabledTools
+			if (loaded.defaultCanCreate !== undefined || loaded.defaultCanNavigate !== undefined) {
+				const disabled = new Set<string>(loaded.disabledTools || []);
+				if (loaded.defaultCanCreate === false) disabled.add('create_note');
+				if (loaded.defaultCanNavigate === false) disabled.add('open_note');
+				loaded.disabledTools = [...disabled];
+				delete loaded.defaultCanCreate;
+				delete loaded.defaultCanNavigate;
+			}
 		}
 
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
@@ -372,11 +373,20 @@ export default class MyPlugin extends Plugin {
 	}
 
 	// Notify all open ObsidianAgent views that settings have changed
-	notifySettingsChanged(changedGroup: 'focused' | 'editRules' | 'web') {
+	notifySettingsChanged(changedGroup: 'context' | 'editRules' | 'web') {
 		const leaves = this.app.workspace.getLeavesOfType(AI_ASSISTANT_VIEW_TYPE);
 		for (const leaf of leaves) {
 			const view = leaf.view as AIAssistantView;
 			view.onSettingsChanged(changedGroup);
+		}
+	}
+
+	// Notify views about edit accept/reject for chat history feedback
+	notifyEditFeedback(filePath: string, action: 'accept' | 'reject') {
+		const leaves = this.app.workspace.getLeavesOfType(AI_ASSISTANT_VIEW_TYPE);
+		for (const leaf of leaves) {
+			const view = leaf.view as AIAssistantView;
+			view.updateEditFeedbackInChat(filePath, action);
 		}
 	}
 
@@ -442,12 +452,14 @@ export default class MyPlugin extends Plugin {
 			rejectBtn.setText('Reject');
 			rejectBtn.addEventListener('click', async () => {
 				await this.editManager.resolveEdit(ctx.sourcePath, edit, 'reject');
+				this.notifyEditFeedback(ctx.sourcePath, 'reject');
 			});
 
 			const acceptBtn = actions.createEl('button', { cls: 'ai-edit-accept' });
 			acceptBtn.setText('Accept');
 			acceptBtn.addEventListener('click', async () => {
 				await this.editManager.resolveEdit(ctx.sourcePath, edit, 'accept');
+				this.notifyEditFeedback(ctx.sourcePath, 'accept');
 			});
 
 		} catch (e) {
@@ -472,6 +484,7 @@ export default class MyPlugin extends Plugin {
 			rejectBtn.title = 'Delete this note';
 			rejectBtn.addEventListener('click', async () => {
 				await this.editManager.resolveNewNote(ctx.sourcePath, data.id, 'reject');
+				this.notifyEditFeedback(ctx.sourcePath, 'reject');
 			});
 
 			const acceptBtn = actions.createEl('button', { cls: 'ai-new-note-accept' });
@@ -479,6 +492,7 @@ export default class MyPlugin extends Plugin {
 			acceptBtn.title = 'Keep this note';
 			acceptBtn.addEventListener('click', async () => {
 				await this.editManager.resolveNewNote(ctx.sourcePath, data.id, 'accept');
+				this.notifyEditFeedback(ctx.sourcePath, 'accept');
 			});
 
 		} catch (e) {
@@ -495,16 +509,6 @@ export default class MyPlugin extends Plugin {
 	// Delegated to EditManager
 	async batchProcessEdits(action: 'accept' | 'reject') {
 		return this.editManager.batchProcessEdits(action);
-	}
-
-	// Delegated to EditManager (still used by showPendingEdits which needs UI access)
-	extractEditsFromContent(content: string): InlineEdit[] {
-		return this.editManager.extractEditsFromContent(content);
-	}
-
-	// Delegated to EditManager (still used by showPendingEdits which needs UI access)
-	extractNewNoteIdsFromContent(content: string): string[] {
-		return this.editManager.extractNewNoteIdsFromContent(content);
 	}
 
 	// Show all files with pending edits (UI logic stays in main.ts, uses EditManager helpers)
@@ -561,6 +565,15 @@ export default class MyPlugin extends Plugin {
 		return this.editManager.insertEditBlocks(validatedEdits);
 	}
 
+	/**
+	 * Format a note's content for inclusion in context.
+	 * Strips pending edit blocks, adds line numbers, wraps in FILE markers.
+	 */
+	formatNoteForContext(content: string, fileName: string, label: string): string {
+		const clean = stripPendingEditBlocks(content, this.settings.pendingEditTag);
+		return `--- FILE: "${fileName}" (${label}) ---\n${addLineNumbers(clean)}\n--- END FILE ---\n`;
+	}
+
 	// Context building methods - new version using ContextScopeConfig
 	async buildContextWithScopeConfig(file: TFile, task: string, scopeConfig: ContextScopeConfig): Promise<string> {
 		this.logger.log('CONTEXT', 'Building context', {
@@ -585,11 +598,7 @@ export default class MyPlugin extends Plugin {
 		let currentContent = '';
 		if (!this.isFileExcluded(file)) {
 			currentContent = await this.app.vault.cachedRead(file);
-			const cleanContent = stripPendingEditBlocks(currentContent, this.settings.pendingEditTag);
-			parts.push(`--- FILE: "${file.name}" (Current Note: "${file.basename}") ---`);
-			parts.push(addLineNumbers(cleanContent));
-			parts.push('--- END FILE ---');
-			parts.push('');
+			parts.push(this.formatNoteForContext(currentContent, file.name, `Current Note: "${file.basename}"`));
 		}
 
 		const seenFiles = new Set<string>();
@@ -605,11 +614,7 @@ export default class MyPlugin extends Plugin {
 					const linkedFile = this.app.vault.getAbstractFileByPath(linkedPath);
 					if (linkedFile instanceof TFile) {
 						const content = await this.app.vault.cachedRead(linkedFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-						parts.push(`--- FILE: "${linkedFile.name}" (Linked Note: "${linkedFile.basename}") ---`);
-						parts.push(addLineNumbers(cleanContent));
-						parts.push('--- END FILE ---');
-						parts.push('');
+						parts.push(this.formatNoteForContext(content, linkedFile.name, `Linked Note: "${linkedFile.basename}"`));
 					}
 				}
 			}
@@ -625,11 +630,7 @@ export default class MyPlugin extends Plugin {
 					const folderFile = this.app.vault.getAbstractFileByPath(folderPath);
 					if (folderFile instanceof TFile) {
 						const content = await this.app.vault.cachedRead(folderFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-						parts.push(`--- FILE: "${folderFile.name}" (Folder Note: "${folderFile.basename}") ---`);
-						parts.push(addLineNumbers(cleanContent));
-						parts.push('--- END FILE ---');
-						parts.push('');
+						parts.push(this.formatNoteForContext(content, folderFile.name, `Folder Note: "${folderFile.basename}"`));
 					}
 				}
 			}
@@ -663,12 +664,8 @@ export default class MyPlugin extends Plugin {
 						// Cache semantic file path for editable scope enforcement
 						this.lastSemanticFilePaths.add(match.notePath);
 						const content = await this.app.vault.cachedRead(semanticFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
 						const scorePercent = (match.score * 100).toFixed(0);
-						parts.push(`--- FILE: "${semanticFile.name}" (Semantic Match: "${semanticFile.basename}", ${scorePercent}% similar) ---`);
-						parts.push(addLineNumbers(cleanContent));
-						parts.push('--- END FILE ---');
-						parts.push('');
+						parts.push(this.formatNoteForContext(content, semanticFile.name, `Semantic Match: "${semanticFile.basename}", ${scorePercent}% similar`));
 					}
 				}
 			} catch (error) {
@@ -685,11 +682,7 @@ export default class MyPlugin extends Plugin {
 					const manualFile = this.app.vault.getAbstractFileByPath(manualPath);
 					if (manualFile instanceof TFile && !this.isFileExcluded(manualFile)) {
 						const content = await this.app.vault.cachedRead(manualFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-						parts.push(`--- FILE: "${manualFile.name}" (Manually Added: "${manualFile.basename}") ---`);
-						parts.push(addLineNumbers(cleanContent));
-						parts.push('--- END FILE ---');
-						parts.push('');
+						parts.push(this.formatNoteForContext(content, manualFile.name, `Manually Added: "${manualFile.basename}"`));
 					}
 				}
 			}
@@ -756,8 +749,7 @@ export default class MyPlugin extends Plugin {
 		// 1. Add current note (NEVER removed - highest priority)
 		if (!this.isFileExcluded(file)) {
 			const content = await this.app.vault.cachedRead(file);
-			const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-			const formattedContent = `--- FILE: "${file.name}" (Current Note: "${file.basename}") ---\n${addLineNumbers(cleanContent)}\n--- END FILE ---\n`;
+			const formattedContent = this.formatNoteForContext(content, file.name, `Current Note: "${file.basename}"`);
 			noteEntries.push({
 				path: file.path,
 				content: formattedContent,
@@ -791,8 +783,7 @@ export default class MyPlugin extends Plugin {
 						const linkedFile = this.app.vault.getAbstractFileByPath(linkedPath);
 						if (linkedFile instanceof TFile) {
 							const content = await this.app.vault.cachedRead(linkedFile);
-							const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-							const formattedContent = `--- FILE: "${linkedFile.name}" (Linked Note: "${linkedFile.basename}") ---\n${addLineNumbers(cleanContent)}\n--- END FILE ---\n`;
+							const formattedContent = this.formatNoteForContext(content, linkedFile.name, `Linked Note: "${linkedFile.basename}"`);
 							noteEntries.push({
 								path: linkedPath,
 								content: formattedContent,
@@ -816,8 +807,7 @@ export default class MyPlugin extends Plugin {
 					const folderFile = this.app.vault.getAbstractFileByPath(folderPath);
 					if (folderFile instanceof TFile) {
 						const content = await this.app.vault.cachedRead(folderFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-						const formattedContent = `--- FILE: "${folderFile.name}" (Folder Note: "${folderFile.basename}") ---\n${addLineNumbers(cleanContent)}\n--- END FILE ---\n`;
+						const formattedContent = this.formatNoteForContext(content, folderFile.name, `Folder Note: "${folderFile.basename}"`);
 						noteEntries.push({
 							path: folderPath,
 							content: formattedContent,
@@ -856,9 +846,8 @@ export default class MyPlugin extends Plugin {
 						seenFiles.add(match.notePath);
 						this.lastSemanticFilePaths.add(match.notePath);
 						const content = await this.app.vault.cachedRead(semanticFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
 						const scorePercent = (match.score * 100).toFixed(0);
-						const formattedContent = `--- FILE: "${semanticFile.name}" (Semantic Match: "${semanticFile.basename}", ${scorePercent}% similar) ---\n${addLineNumbers(cleanContent)}\n--- END FILE ---\n`;
+						const formattedContent = this.formatNoteForContext(content, semanticFile.name, `Semantic Match: "${semanticFile.basename}", ${scorePercent}% similar`);
 						noteEntries.push({
 							path: match.notePath,
 							content: formattedContent,
@@ -881,8 +870,7 @@ export default class MyPlugin extends Plugin {
 					const manualFile = this.app.vault.getAbstractFileByPath(manualPath);
 					if (manualFile instanceof TFile && !this.isFileExcluded(manualFile)) {
 						const content = await this.app.vault.cachedRead(manualFile);
-						const cleanContent = stripPendingEditBlocks(content, this.settings.pendingEditTag);
-						const formattedContent = `--- FILE: "${manualFile.name}" (Manually Added: "${manualFile.basename}") ---\n${addLineNumbers(cleanContent)}\n--- END FILE ---\n`;
+						const formattedContent = this.formatNoteForContext(content, manualFile.name, `Manually Added: "${manualFile.basename}"`);
 						noteEntries.push({
 							path: manualPath,
 							content: formattedContent,
@@ -1018,6 +1006,16 @@ export default class MyPlugin extends Plugin {
 			} catch (error) {
 				// Continue without semantic matches
 				this.logger.warn('SEMANTIC', 'Failed to count semantic matches', error);
+			}
+		}
+
+		// Count manually added notes
+		if (scopeConfig.manuallyAddedNotes && scopeConfig.manuallyAddedNotes.length > 0) {
+			for (const path of scopeConfig.manuallyAddedNotes) {
+				if (!seenFiles.has(path)) {
+					seenFiles.add(path);
+					included++;
+				}
 			}
 		}
 
@@ -1183,10 +1181,7 @@ export default class MyPlugin extends Plugin {
 		return buildTaskAgentSystemPrompt(
 			capabilities,
 			editableScope,
-			{
-				character: this.settings.customPromptCharacter,
-				edit: this.settings.customPromptEdit
-			}
+			{ character: this.settings.customInstructions }
 		);
 	}
 
@@ -1195,78 +1190,11 @@ export default class MyPlugin extends Plugin {
 	}
 
 	isFileExcluded(file: TFile): boolean {
-		if (this.settings.excludedFolders.length === 0) return false;
-
-		for (const excludedFolder of this.settings.excludedFolders) {
-			const normalizedFolder = excludedFolder.endsWith('/') ? excludedFolder : excludedFolder + '/';
-			if (file.path.startsWith(normalizedFolder) || file.parent?.path === excludedFolder) {
-				return true;
-			}
-		}
-		return false;
+		return isFileExcluded(file.path, this.settings.excludedFolders);
 	}
 
 	isPathExcluded(filePath: string): boolean {
-		if (this.settings.excludedFolders.length === 0) return false;
-
-		for (const excludedFolder of this.settings.excludedFolders) {
-			const normalizedFolder = excludedFolder.endsWith('/') ? excludedFolder : excludedFolder + '/';
-			if (filePath.startsWith(normalizedFolder)) {
-				return true;
-			}
-			// Check if parent folder matches
-			const parentPath = filePath.substring(0, filePath.lastIndexOf('/'));
-			if (parentPath === excludedFolder) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	parseAIEditResponse(responseText: string): AIEditResponse | null {
-		this.logger.log('PARSE', 'Parsing AI response', {
-			responseLength: responseText.length,
-			startsWithBackticks: responseText.trim().startsWith('```')
-		});
-
-		try {
-			let jsonStr = responseText.trim();
-
-			// Only extract from code block if the response STARTS with backticks
-			// (meaning the whole response is wrapped, not just containing markdown with code blocks)
-			if (jsonStr.startsWith('```')) {
-				const codeBlockMatch = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
-				if (codeBlockMatch) {
-					jsonStr = codeBlockMatch[1].trim();
-					this.logger.log('PARSE', 'Extracted JSON from code block', {
-						extractedLength: jsonStr.length
-					});
-				}
-			}
-
-			const parsed = JSON.parse(jsonStr);
-
-			if (!parsed.edits || !Array.isArray(parsed.edits)) {
-				this.logger.error('PARSE', 'Invalid response structure: missing edits array', { parsed });
-				return null;
-			}
-
-			this.logger.log('PARSE', 'Successfully parsed response', {
-				editsCount: parsed.edits.length,
-				summary: parsed.summary
-			});
-
-			return {
-				edits: parsed.edits,
-				summary: parsed.summary || 'No summary provided'
-			};
-		} catch (e) {
-			this.logger.error('PARSE', 'JSON parse failed', {
-				error: e instanceof Error ? e.message : String(e),
-				rawTextPreview: responseText.substring(0, 500)
-			});
-			return null;
-		}
+		return isFileExcluded(filePath, this.settings.excludedFolders);
 	}
 
 	async validateEdits(edits: EditInstruction[]): Promise<ValidatedEdit[]> {
@@ -1500,7 +1428,7 @@ export default class MyPlugin extends Plugin {
 			}
 		}
 
-		// Add Scout-selected paths (when Scout Agent is used)
+		// Add agent-selected paths
 		if (scoutSelectedPaths && scoutSelectedPaths.length > 0) {
 			for (const path of scoutSelectedPaths) {
 				allowed.add(path);
@@ -1533,12 +1461,17 @@ class AIAssistantView extends ItemView {
 		canCreate: true,
 		canNavigate: true
 	};
-	// Agent toggles - initialized from settings in onOpen
-	agentToggles: AgentToggles = { scout: false, web: false, task: true };
 	taskText = '';
 	isLoading = false;
 	chatMessages: ChatMessage[] = [];
 	lastActiveFilePath: string | null = null;
+	// Agent abort controller for cancellation
+	private agentAbortController: AbortController | null = null;
+	// Pending agent state for ask_user resumption
+	private pendingAgentState: {
+		resumeState: string;
+		userMessage: string;
+	} | null = null;
 
 	// UI refs
 	private chatContainer: HTMLDivElement | null = null;
@@ -1546,6 +1479,7 @@ class AIAssistantView extends ItemView {
 	private contextSummary: HTMLSpanElement | null = null;
 	private taskTextarea: HTMLTextAreaElement | null = null;
 	private submitButton: HTMLButtonElement | null = null;
+	private stopButton: HTMLButtonElement | null = null;
 	private welcomeMessage: HTMLDivElement | null = null;
 	// Slider elements (for live sync from settings)
 	private depthSlider: HTMLInputElement | null = null;
@@ -1560,21 +1494,15 @@ class AIAssistantView extends ItemView {
 	private semanticCountLabel: HTMLSpanElement | null = null;
 	private semanticSimilarityLabel: HTMLSpanElement | null = null;
 	private semanticWarningEl: HTMLDivElement | null = null;
-	// Agent toggle UI refs
+	// Agent progress UI refs
 	private agentProgressContainer: HTMLDivElement | null = null;
-	private scoutToggleBtn: HTMLButtonElement | null = null;
-	private webToggleBtn: HTMLButtonElement | null = null;
-	private taskToggleBtn: HTMLButtonElement | null = null;
 	// Manual notes picker
 	private manualNotesContainer: HTMLDivElement | null = null;
 	// User clarification UI (for ask_user tool)
 	private clarificationContainer: HTMLDivElement | null = null;
-	// Pending scout state for ask_user resumption
-	private pendingScoutState: {
-		resumeState: string;
-		userMessage: string;
-		file: TFile | null;
-	} | null = null;
+	// Pending copy notes data (stored between callback and bubble render)
+	private pendingCopyContent: string = '';
+	private pendingCopyPaths: string[] = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: MyPlugin) {
 		super(leaf);
@@ -1609,15 +1537,13 @@ class AIAssistantView extends ItemView {
 
 		// Initialize edit rules from settings defaults
 		this.editableScope = this.plugin.settings.defaultEditableScope;
+		const disabledInit = new Set(this.plugin.settings.disabledTools || []);
 		this.capabilities = {
 			canAdd: this.plugin.settings.defaultCanAdd,
 			canDelete: this.plugin.settings.defaultCanDelete,
-			canCreate: this.plugin.settings.defaultCanCreate,
-			canNavigate: this.plugin.settings.defaultCanNavigate
+			canCreate: !disabledInit.has('create_note'),
+			canNavigate: !disabledInit.has('open_note')
 		};
-
-		// Initialize agent toggles from settings
-		this.agentToggles = { ...this.plugin.settings.agentToggles };
 
 		// Chat header with clear button (top-left, fixed above chat)
 		const chatHeader = container.createDiv({ cls: 'ai-chat-header' });
@@ -1677,6 +1603,7 @@ class AIAssistantView extends ItemView {
 		this.taskTextarea.addEventListener('keydown', (e) => {
 			if (e.key === 'Enter' && !e.shiftKey) {
 				e.preventDefault();
+				if (this.isLoading) return;
 				this.handleSubmit();
 			}
 		});
@@ -1689,169 +1616,107 @@ class AIAssistantView extends ItemView {
 		this.submitButton.title = 'Send message';
 		this.submitButton.addEventListener('click', () => this.handleSubmit());
 
-		// Agent toggle buttons
-		const agentTogglesSection = bottomSection.createDiv({ cls: 'ai-agent-toggles' });
-
-		// Scout toggle button
-		this.scoutToggleBtn = this.createAgentToggleButton(
-			agentTogglesSection,
-			'search',
-			'Scout',
-			this.agentToggles.scout,
-			(active) => {
-				this.agentToggles.scout = active;
-				this.onAgentToggleChange();
-			}
-		);
-
-		// Web toggle button
-		this.webToggleBtn = this.createAgentToggleButton(
-			agentTogglesSection,
-			'globe',
-			'Web',
-			this.agentToggles.web,
-			(active) => {
-				this.agentToggles.web = active;
-				this.onAgentToggleChange();
-			}
-		);
-		this.updateWebToggleState();
-
-		// Task toggle button
-		this.taskToggleBtn = this.createAgentToggleButton(
-			agentTogglesSection,
-			'zap',
-			'Task',
-			this.agentToggles.task,
-			(active) => {
-				this.agentToggles.task = active;
-				this.onAgentToggleChange();
-			}
-		);
+		// Stop button (hidden by default, shown during agent execution)
+		this.stopButton = inputRow.createEl('button', {
+			cls: 'ai-assistant-stop-btn'
+		});
+		this.stopButton.setText('Stop');
+		this.stopButton.title = 'Stop agent execution';
+		this.stopButton.style.display = 'none';
+		this.stopButton.addEventListener('click', () => this.handleStop());
 
 		// Context Notes toggle
 		this.contextDetails = bottomSection.createEl('details', { cls: 'ai-assistant-toggle' });
 		this.contextDetails.open = false;
 		const contextSummaryEl = this.contextDetails.createEl('summary');
-		contextSummaryEl.createSpan({ text: 'Context Notes ' });
+		contextSummaryEl.createSpan({ text: 'Manual Context ' });
 		this.contextSummary = contextSummaryEl.createSpan({ cls: 'ai-assistant-context-info' });
 
 		const contextContent = this.contextDetails.createDiv({ cls: 'ai-assistant-toggle-content' });
 
-		// Preview button at top of toggle content
-		const contextPreviewBtn = contextContent.createEl('button', {
-			cls: 'ai-assistant-context-preview-btn',
-			attr: { 'aria-label': 'Preview context notes' }
+		contextContent.createEl('p', {
+			text: 'This manual context is only referred to by the agent if mentioned in your prompts.',
+			cls: 'ai-assistant-context-hint'
 		});
-		setIcon(contextPreviewBtn, 'list');
-		contextPreviewBtn.createSpan({ text: ' View all context notes' });
-		contextPreviewBtn.addEventListener('click', () => this.showContextPreview());
+
+		// Helper: create a labeled slider control
+		const createSlider = (
+			parent: HTMLElement,
+			label: string,
+			min: number,
+			max: number,
+			value: number,
+			updateLabel: (val: number) => void,
+			onChange: (val: number) => void
+		): { slider: HTMLInputElement; label: HTMLSpanElement } => {
+			const section = parent.createDiv({ cls: 'ai-assistant-slider-section' });
+			section.createEl('div', { text: label, cls: 'ai-assistant-section-label' });
+			const row = section.createDiv({ cls: 'ai-assistant-slider-row' });
+			const slider = row.createEl('input', { type: 'range', cls: 'ai-assistant-depth-slider' });
+			slider.min = min.toString();
+			slider.max = max.toString();
+			slider.value = value.toString();
+			const labelEl = row.createSpan({ cls: 'ai-assistant-slider-value' });
+			updateLabel(value);
+			slider.addEventListener('input', () => {
+				const val = parseInt(slider.value, 10);
+				onChange(val);
+				updateLabel(val);
+				this.updateContextSummary();
+			});
+			return { slider, label: labelEl };
+		};
 
 		// Max Linked Notes slider (0-50)
-		const maxLinkedSection = contextContent.createDiv({ cls: 'ai-assistant-slider-section' });
-		maxLinkedSection.createEl('div', { text: 'Max linked notes:', cls: 'ai-assistant-section-label' });
-		const maxLinkedRow = maxLinkedSection.createDiv({ cls: 'ai-assistant-slider-row' });
-		this.maxLinkedSlider = maxLinkedRow.createEl('input', {
-			type: 'range',
-			cls: 'ai-assistant-depth-slider'
-		});
-		this.maxLinkedSlider.min = '0';
-		this.maxLinkedSlider.max = '50';
-		this.maxLinkedSlider.value = this.contextScopeConfig.maxLinkedNotes.toString();
-		this.maxLinkedLabel = maxLinkedRow.createSpan({ cls: 'ai-assistant-slider-value' });
-		this.updateMaxLinkedLabel(this.contextScopeConfig.maxLinkedNotes);
-		this.maxLinkedSlider.addEventListener('input', () => {
-			const val = parseInt(this.maxLinkedSlider!.value, 10);
-			this.contextScopeConfig.maxLinkedNotes = val;
-			this.updateMaxLinkedLabel(val);
-			this.updateContextSummary();
-		});
+		const maxLinked = createSlider(contextContent, 'Max linked notes:', 0, 50,
+			this.contextScopeConfig.maxLinkedNotes,
+			(v) => this.updateMaxLinkedLabel(v),
+			(v) => { this.contextScopeConfig.maxLinkedNotes = v; }
+		);
+		this.maxLinkedSlider = maxLinked.slider;
+		this.maxLinkedLabel = maxLinked.label;
 
 		// Link depth slider (0-3)
-		const depthSection = contextContent.createDiv({ cls: 'ai-assistant-slider-section' });
-		depthSection.createEl('div', { text: 'Link depth:', cls: 'ai-assistant-section-label' });
-		const depthRow = depthSection.createDiv({ cls: 'ai-assistant-slider-row' });
-		this.depthSlider = depthRow.createEl('input', {
-			type: 'range',
-			cls: 'ai-assistant-depth-slider'
-		});
-		this.depthSlider.min = '0';
-		this.depthSlider.max = '3';
-		this.depthSlider.value = this.contextScopeConfig.linkDepth.toString();
-		this.depthValueLabel = depthRow.createSpan({ cls: 'ai-assistant-slider-value' });
-		this.updateDepthLabel(this.contextScopeConfig.linkDepth);
-		this.depthSlider.addEventListener('input', () => {
-			const depth = parseInt(this.depthSlider!.value, 10) as LinkDepth;
-			this.contextScopeConfig.linkDepth = depth;
-			this.updateDepthLabel(depth);
-			this.updateContextSummary();
-		});
+		const depth = createSlider(contextContent, 'Link depth:', 0, 3,
+			this.contextScopeConfig.linkDepth,
+			(v) => this.updateDepthLabel(v as LinkDepth),
+			(v) => { this.contextScopeConfig.linkDepth = v as LinkDepth; }
+		);
+		this.depthSlider = depth.slider;
+		this.depthValueLabel = depth.label;
 
 		// Separator before folder section
 		contextContent.createEl('hr', { cls: 'ai-assistant-separator' });
 
 		// Max Folder Notes slider (0-20)
-		const maxFolderSection = contextContent.createDiv({ cls: 'ai-assistant-slider-section' });
-		maxFolderSection.createEl('div', { text: 'Max folder notes:', cls: 'ai-assistant-section-label' });
-		const maxFolderRow = maxFolderSection.createDiv({ cls: 'ai-assistant-slider-row' });
-		this.maxFolderSlider = maxFolderRow.createEl('input', {
-			type: 'range',
-			cls: 'ai-assistant-depth-slider'
-		});
-		this.maxFolderSlider.min = '0';
-		this.maxFolderSlider.max = '20';
-		this.maxFolderSlider.value = this.contextScopeConfig.maxFolderNotes.toString();
-		this.maxFolderLabel = maxFolderRow.createSpan({ cls: 'ai-assistant-slider-value' });
-		this.updateMaxFolderLabel(this.contextScopeConfig.maxFolderNotes);
-		this.maxFolderSlider.addEventListener('input', () => {
-			const val = parseInt(this.maxFolderSlider!.value, 10);
-			this.contextScopeConfig.maxFolderNotes = val;
-			this.updateMaxFolderLabel(val);
-			this.updateContextSummary();
-		});
+		const maxFolder = createSlider(contextContent, 'Max folder notes:', 0, 20,
+			this.contextScopeConfig.maxFolderNotes,
+			(v) => this.updateMaxFolderLabel(v),
+			(v) => { this.contextScopeConfig.maxFolderNotes = v; }
+		);
+		this.maxFolderSlider = maxFolder.slider;
+		this.maxFolderLabel = maxFolder.label;
 
 		// Semantic search section
 		const semanticSection = contextContent.createDiv({ cls: 'ai-assistant-semantic-section' });
 
 		// Max Semantic Notes slider (0-20)
-		const semanticCountSection = semanticSection.createDiv({ cls: 'ai-assistant-slider-section' });
-		semanticCountSection.createEl('div', { text: 'Max semantic notes:', cls: 'ai-assistant-section-label' });
-		const semanticCountRow = semanticCountSection.createDiv({ cls: 'ai-assistant-slider-row' });
-		this.semanticCountSlider = semanticCountRow.createEl('input', {
-			type: 'range',
-			cls: 'ai-assistant-depth-slider'
-		});
-		this.semanticCountSlider.min = '0';
-		this.semanticCountSlider.max = '20';
-		this.semanticCountSlider.value = this.contextScopeConfig.semanticMatchCount.toString();
-		this.semanticCountLabel = semanticCountRow.createSpan({ cls: 'ai-assistant-slider-value' });
-		this.updateSemanticCountLabel(this.contextScopeConfig.semanticMatchCount);
-		this.semanticCountSlider.addEventListener('input', () => {
-			const count = parseInt(this.semanticCountSlider!.value, 10);
-			this.contextScopeConfig.semanticMatchCount = count;
-			this.updateSemanticCountLabel(count);
-			this.updateContextSummary();
-		});
+		const semanticCount = createSlider(semanticSection, 'Max semantic notes:', 0, 20,
+			this.contextScopeConfig.semanticMatchCount,
+			(v) => this.updateSemanticCountLabel(v),
+			(v) => { this.contextScopeConfig.semanticMatchCount = v; }
+		);
+		this.semanticCountSlider = semanticCount.slider;
+		this.semanticCountLabel = semanticCount.label;
 
 		// Min Similarity slider (0-100%)
-		const semanticSimilaritySection = semanticSection.createDiv({ cls: 'ai-assistant-slider-section' });
-		semanticSimilaritySection.createEl('div', { text: 'Min similarity:', cls: 'ai-assistant-section-label' });
-		const semanticSimilarityRow = semanticSimilaritySection.createDiv({ cls: 'ai-assistant-slider-row' });
-		this.semanticSimilaritySlider = semanticSimilarityRow.createEl('input', {
-			type: 'range',
-			cls: 'ai-assistant-depth-slider'
-		});
-		this.semanticSimilaritySlider.min = '0';
-		this.semanticSimilaritySlider.max = '100';
-		this.semanticSimilaritySlider.value = this.contextScopeConfig.semanticMinSimilarity.toString();
-		this.semanticSimilarityLabel = semanticSimilarityRow.createSpan({ cls: 'ai-assistant-slider-value' });
-		this.updateSemanticSimilarityLabel(this.contextScopeConfig.semanticMinSimilarity);
-		this.semanticSimilaritySlider.addEventListener('input', () => {
-			const val = parseInt(this.semanticSimilaritySlider!.value, 10);
-			this.contextScopeConfig.semanticMinSimilarity = val;
-			this.updateSemanticSimilarityLabel(val);
-			this.updateContextSummary();
-		});
+		const semanticSimilarity = createSlider(semanticSection, 'Min similarity:', 0, 100,
+			this.contextScopeConfig.semanticMinSimilarity,
+			(v) => this.updateSemanticSimilarityLabel(v),
+			(v) => { this.contextScopeConfig.semanticMinSimilarity = v; }
+		);
+		this.semanticSimilaritySlider = semanticSimilarity.slider;
+		this.semanticSimilarityLabel = semanticSimilarity.label;
 
 		// No index warning (shown if no embeddings)
 		this.semanticWarningEl = semanticSection.createDiv({ cls: 'ai-assistant-semantic-warning' });
@@ -1876,6 +1741,15 @@ class AIAssistantView extends ItemView {
 				this.addManualNote(file.path);
 			}).open();
 		});
+
+		// Preview button at bottom of toggle content
+		const contextPreviewBtn = manualSection.createEl('button', {
+			cls: 'ai-assistant-context-preview-btn',
+			attr: { 'aria-label': 'Preview context notes' }
+		});
+		setIcon(contextPreviewBtn, 'list');
+		contextPreviewBtn.createSpan({ text: ' View all context notes' });
+		contextPreviewBtn.addEventListener('click', () => this.showContextPreview());
 
 		// Note: Edit Rules moved to Settings panel
 
@@ -1909,9 +1783,11 @@ class AIAssistantView extends ItemView {
 			this.showContextIndicator(initialFile.path, initialFile.basename);
 		}
 
-		// Initialize panel visibility and send button state
-		this.updateToggleVisibility();
-		this.updateSendButtonState();
+		// Context notes panel visibility depends on get_manual_context tool being enabled
+		if (this.contextDetails) {
+			const mcDisabled = (this.plugin.settings.disabledTools || []).includes('get_manual_context');
+			this.contextDetails.style.display = mcDisabled ? 'none' : 'block';
+		}
 	}
 
 	autoResizeTextarea() {
@@ -1979,47 +1855,26 @@ class AIAssistantView extends ItemView {
 		return !!s.webAgentSearchApiKey;
 	}
 
-	updateWebToggleState() {
-		if (!this.webToggleBtn) return;
-		const configured = this.isWebSearchConfigured();
-		if (!configured) {
-			this.webToggleBtn.disabled = true;
-			this.webToggleBtn.title = 'Configure search API key in settings';
-			if (this.agentToggles.web) {
-				this.agentToggles.web = false;
-				this.webToggleBtn.removeClass('active');
-				this.onAgentToggleChange();
-			}
-		} else {
-			this.webToggleBtn.disabled = false;
-			this.webToggleBtn.title = '';
-		}
-	}
-
 	// Called by plugin when settings change to sync sliders in the view
-	onSettingsChanged(changedGroup: 'focused' | 'editRules' | 'web') {
+	onSettingsChanged(changedGroup: 'context' | 'editRules' | 'web') {
 		if (changedGroup === 'editRules') {
-			// Update edit rules from settings
 			const s = this.plugin.settings;
 			this.editableScope = s.defaultEditableScope;
+			const disabledSet = new Set(s.disabledTools || []);
 			this.capabilities = {
 				canAdd: s.defaultCanAdd,
 				canDelete: s.defaultCanDelete,
-				canCreate: s.defaultCanCreate,
-				canNavigate: s.defaultCanNavigate
+				canCreate: !disabledSet.has('create_note'),
+				canNavigate: !disabledSet.has('open_note')
 			};
-		} else if (changedGroup === 'focused') {
-			// Update focused mode sliders from settings
+		} else if (changedGroup === 'context') {
 			const s = this.plugin.settings;
-
-			// Update contextScopeConfig from settings
 			this.contextScopeConfig.linkDepth = s.defaultLinkDepth as LinkDepth;
 			this.contextScopeConfig.maxLinkedNotes = s.defaultMaxLinkedNotes;
 			this.contextScopeConfig.maxFolderNotes = s.defaultMaxFolderNotes;
 			this.contextScopeConfig.semanticMatchCount = s.defaultSemanticMatchCount;
 			this.contextScopeConfig.semanticMinSimilarity = s.defaultSemanticMinSimilarity;
 
-			// Update slider values and labels
 			if (this.depthSlider) {
 				this.depthSlider.value = s.defaultLinkDepth.toString();
 				this.updateDepthLabel(s.defaultLinkDepth as LinkDepth);
@@ -2042,105 +1897,21 @@ class AIAssistantView extends ItemView {
 			}
 
 			this.updateSemanticSlidersState();
-
-			// Update context summary
 			this.updateContextSummary();
-		} else if (changedGroup === 'web') {
-			this.updateWebToggleState();
-		}
-	}
 
-	// Create an agent toggle button
-	createAgentToggleButton(
-		container: HTMLElement,
-		iconName: string,
-		label: string,
-		initialActive: boolean,
-		onChange: (active: boolean) => void
-	): HTMLButtonElement {
-		const btn = container.createEl('button', { cls: 'ai-agent-toggle-btn' });
-		if (initialActive) btn.addClass('active');
-
-		const iconEl = btn.createDiv({ cls: 'icon' });
-		setIcon(iconEl, iconName);
-
-		btn.createDiv({ cls: 'label', text: label });
-
-		btn.addEventListener('click', () => {
-			if (btn.disabled) return;
-			const isActive = btn.hasClass('active');
-			if (isActive) {
-				btn.removeClass('active');
-			} else {
-				btn.addClass('active');
-			}
-			onChange(!isActive);
-		});
-
-		return btn;
-	}
-
-	// Called when any agent toggle changes
-	async onAgentToggleChange() {
-		// Save to settings
-		this.plugin.settings.agentToggles = { ...this.agentToggles };
-		await this.plugin.saveSettings();
-
-		// Update panel visibility
-		this.updateToggleVisibility();
-
-		// Update send button state
-		this.updateSendButtonState();
-	}
-
-	// Update panel visibility based on agent toggles
-	// Scout ON → show scout settings panel, hide manual context panel
-	// Scout OFF → show manual context panel, hide scout settings panel
-	updateToggleVisibility() {
-		if (this.contextDetails) {
-			this.contextDetails.style.display = this.agentToggles.scout ? 'none' : 'block';
-		}
-	}
-
-	// Disable send button when all agents are off
-	updateSendButtonState() {
-		if (!this.submitButton) return;
-
-		const anyAgentEnabled = this.agentToggles.scout || this.agentToggles.web || this.agentToggles.task;
-
-		if (anyAgentEnabled) {
-			this.submitButton.removeClass('disabled');
-			this.submitButton.disabled = false;
-			this.submitButton.title = 'Send message';
-		} else {
-			this.submitButton.addClass('disabled');
-			this.submitButton.disabled = true;
-			this.submitButton.title = 'Enable at least one agent to send';
-		}
-	}
-
-	// Sync toggle button UI state with agentToggles
-	syncAgentToggleButtons() {
-		if (this.scoutToggleBtn) {
-			if (this.agentToggles.scout) {
-				this.scoutToggleBtn.addClass('active');
-			} else {
-				this.scoutToggleBtn.removeClass('active');
+			// Toggle visibility of context panel based on get_manual_context being enabled
+			if (this.contextDetails) {
+				const mcDisabled = (s.disabledTools || []).includes('get_manual_context');
+				this.contextDetails.style.display = mcDisabled ? 'none' : 'block';
 			}
 		}
-		if (this.webToggleBtn) {
-			if (this.agentToggles.web) {
-				this.webToggleBtn.addClass('active');
-			} else {
-				this.webToggleBtn.removeClass('active');
-			}
-		}
-		if (this.taskToggleBtn) {
-			if (this.agentToggles.task) {
-				this.taskToggleBtn.addClass('active');
-			} else {
-				this.taskToggleBtn.removeClass('active');
-			}
+	}
+
+	// Handle stop button click
+	handleStop() {
+		if (this.agentAbortController) {
+			this.agentAbortController.abort();
+			this.agentAbortController = null;
 		}
 	}
 
@@ -2201,37 +1972,64 @@ class AIAssistantView extends ItemView {
 	private agentActionsToggle: HTMLDetailsElement | null = null;
 	private agentStepsContainer: HTMLDivElement | null = null;
 	private currentRoundNumber: number = 0;
+	private lastToolStepEl: HTMLDetailsElement | null = null;
 
 	// Show agent progress in chat during exploration
-	showAgentProgress(message: string, detail?: string) {
+	showAgentProgress(type: string, message: string, detail?: string, fullContent?: string) {
 		if (!this.agentStepsContainer) return;
 
-		// Check if this is a new exploration round
-		if (message.startsWith('Exploration round')) {
+		if (type === 'iteration') {
+			// Round headers / separators
 			this.currentRoundNumber++;
-			// Add separator line between rounds (not before the first round)
 			if (this.currentRoundNumber > 1) {
-				// Extract just "N/M" (and optional FINAL) from "Exploration round N/M"
-				const shortLabel = message.replace('Exploration round ', '');
+				const shortLabel = message.replace('Round ', '');
 				const separator = this.agentStepsContainer.createDiv({ cls: 'ai-agent-round-separator' });
 				separator.createSpan({ cls: 'ai-agent-round-separator-line' });
 				separator.createSpan({ cls: 'ai-agent-round-separator-text', text: shortLabel });
 				separator.createSpan({ cls: 'ai-agent-round-separator-line' });
 			} else {
-				// First round - just show as header text
 				const roundHeader = this.agentStepsContainer.createDiv({ cls: 'ai-agent-round-header' });
 				roundHeader.setText(message);
 			}
-		} else {
-			// Regular step
-			const stepEl = this.agentStepsContainer.createDiv({ cls: 'ai-agent-progress-step' });
-			const bulletEl = stepEl.createSpan({ cls: 'ai-agent-progress-bullet' });
-			bulletEl.setText('\u2022');
-			const textEl = stepEl.createSpan({ cls: 'ai-agent-progress-text' });
-			textEl.setText(message);
+		} else if (type === 'thinking') {
+			// Collapsible thinking/reasoning block
+			const thinkingEl = this.agentStepsContainer.createEl('details', { cls: 'ai-agent-thinking' });
+			thinkingEl.createEl('summary', { text: 'Agent reasoning' });
+			const contentEl = thinkingEl.createDiv({ cls: 'ai-agent-thinking-content' });
+			if (fullContent) {
+				MarkdownRenderer.render(
+					this.app,
+					fullContent,
+					contentEl,
+					this.getSourcePath(),
+					this
+				);
+			}
+		} else if (type === 'tool_call') {
+			// Create expandable tool step (details/summary)
+			const detailsEl = this.agentStepsContainer.createEl('details', { cls: 'ai-agent-tool-details' });
+			const summaryEl = detailsEl.createEl('summary', { cls: 'ai-agent-progress-step' });
+			summaryEl.createSpan({ cls: 'ai-agent-progress-bullet', text: '\u2022' });
+			summaryEl.createSpan({ cls: 'ai-agent-progress-text', text: message });
 			if (detail) {
-				const detailEl = stepEl.createSpan({ cls: 'ai-agent-progress-detail' });
-				detailEl.setText(` \u2192 ${detail}`);
+				summaryEl.createSpan({ cls: 'ai-agent-progress-detail', text: ` \u2192 ${detail}` });
+			}
+			summaryEl.createSpan({ cls: 'ai-agent-tool-expand-icon', text: '\u203A' });
+			// Store reference so tool_result can attach content
+			this.lastToolStepEl = detailsEl;
+		} else if (type === 'tool_result') {
+			// Attach result content to the last tool step
+			if (this.lastToolStepEl && fullContent) {
+				const resultEl = this.lastToolStepEl.createDiv({ cls: 'ai-agent-tool-result' });
+				// Truncate long results
+				const lines = fullContent.split('\n');
+				const MAX_LINES = 80;
+				if (lines.length > MAX_LINES) {
+					resultEl.createEl('pre', { text: lines.slice(0, MAX_LINES).join('\n') + `\n... (${lines.length - MAX_LINES} more lines truncated)` });
+				} else {
+					resultEl.createEl('pre', { text: fullContent });
+				}
+				this.lastToolStepEl = null;
 			}
 		}
 
@@ -2252,18 +2050,19 @@ class AIAssistantView extends ItemView {
 
 		// Reset state
 		this.currentRoundNumber = 0;
+		this.lastToolStepEl = null;
 
 		this.agentProgressContainer = this.chatContainer.createDiv({ cls: 'ai-agent-progress-container' });
 
 		const headerEl = this.agentProgressContainer.createDiv({ cls: 'ai-agent-progress-header' });
 		headerEl.createSpan({ cls: 'ai-agent-progress-icon', text: '\uD83D\uDD0D' });
-		headerEl.createSpan({ cls: 'ai-agent-progress-title', text: ' Exploring vault...' });
+		headerEl.createSpan({ cls: 'ai-agent-progress-title', text: ' Agent working...' });
 
-		// Create collapsible actions toggle (starts open during exploration)
+		// Create collapsible actions toggle (starts open during execution)
 		this.agentActionsToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-actions-toggle' });
 		this.agentActionsToggle.open = true;
 		const actionsSummary = this.agentActionsToggle.createEl('summary');
-		actionsSummary.setText('Exploration actions');
+		actionsSummary.setText('Agent actions');
 
 		// Container for actual steps
 		this.agentStepsContainer = this.agentActionsToggle.createDiv({ cls: 'ai-agent-steps-container' });
@@ -2272,133 +2071,12 @@ class AIAssistantView extends ItemView {
 		return this.agentProgressContainer;
 	}
 
-	// Update progress header when exploration completes
-	completeAgentProgress(noteCount: number, reasoning: string, selectedPaths: string[], findings?: ScoutFinding[]) {
-		if (!this.agentProgressContainer) return;
-
-		// Add completed class for styling
-		this.agentProgressContainer.addClass('completed');
-
-		// Build header text based on what we have
-		const header = this.agentProgressContainer.querySelector('.ai-agent-progress-header');
-		if (header) {
-			header.empty();
-			header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2713' });
-
-			const parts: string[] = [];
-			if (noteCount > 0) parts.push(`${noteCount} note${noteCount !== 1 ? 's' : ''}`);
-			if (findings && findings.length > 0) parts.push(`${findings.length} finding${findings.length !== 1 ? 's' : ''}`);
-			const headerText = parts.length > 0 ? parts.join(', ') : 'no context needed';
-			header.createSpan({ cls: 'ai-agent-progress-title', text: ` Context curated (${headerText})` });
-		}
-
-		// Collapse the actions toggle
-		if (this.agentActionsToggle) {
-			this.agentActionsToggle.open = false;
-		}
-
-		// Add selected notes toggle (collapsed) — only when there are notes
-		if (selectedPaths.length > 0) {
-			const notesToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-notes-toggle' });
-			const notesSummary = notesToggle.createEl('summary');
-			const notesSummaryText = notesSummary.createSpan();
-			notesSummaryText.setText(`Selected notes (${selectedPaths.length})`);
-
-			// Add copy button to summary
-			const copyBtn = notesSummary.createEl('button', {
-				cls: 'ai-agent-copy-btn',
-				attr: { 'aria-label': 'Copy all note contents' }
-			});
-			setIcon(copyBtn, 'clipboard-copy');
-			copyBtn.title = 'Copy all note contents';
-			copyBtn.addEventListener('click', async (e) => {
-				e.stopPropagation();
-				e.preventDefault();
-				await this.copySelectedNotesContent(selectedPaths);
-			});
-
-			const notesContent = notesToggle.createDiv({ cls: 'ai-agent-notes-content' });
-
-			const notesList = notesContent.createEl('ul', { cls: 'ai-agent-notes-list' });
-			for (const path of selectedPaths) {
-				const noteItem = notesList.createEl('li');
-				const noteText = noteItem.createSpan({ cls: 'ai-agent-note-path' });
-				noteText.setText(path);
-
-				// Add clickable link icon
-				const linkIcon = noteItem.createSpan({ cls: 'ai-agent-note-link' });
-				setIcon(linkIcon, 'link');
-				linkIcon.title = 'Open note';
-				linkIcon.addEventListener('click', (e) => {
-					e.stopPropagation();
-					const file = this.app.vault.getAbstractFileByPath(path);
-					if (file instanceof TFile) {
-						this.app.workspace.getLeaf(false).openFile(file);
-					}
-				});
-			}
-		}
-
-		// Add scout findings toggle (collapsed) — only when findings exist
-		if (findings && findings.length > 0) {
-			const findingsToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-findings-toggle' });
-			const findingsSummary = findingsToggle.createEl('summary');
-			findingsSummary.setText(`Scout findings (${findings.length})`);
-
-			const findingsContent = findingsToggle.createDiv({ cls: 'ai-agent-findings-content' });
-			for (const finding of findings) {
-				const findingItem = findingsContent.createDiv({ cls: 'ai-agent-finding-item' });
-				findingItem.createEl('strong', { text: finding.label });
-				const findingData = findingItem.createDiv({ cls: 'ai-agent-finding-data' });
-				MarkdownRenderer.render(this.app, finding.data, findingData, this.getSourcePath(), this);
-			}
-		}
-
-		// Add explanation toggle (collapsed)
-		const reasoningToggle = this.agentProgressContainer.createEl('details', { cls: 'ai-agent-reasoning-toggle' });
-		const reasoningSummary = reasoningToggle.createEl('summary');
-		reasoningSummary.setText('Explanation');
-		const reasoningContent = reasoningToggle.createDiv({ cls: 'ai-agent-reasoning-content' });
-		reasoningContent.setText(reasoning);
-
-		this.scrollChatToBottom();
-	}
-
 	// Remove agent progress container
 	removeAgentProgress() {
 		if (this.agentProgressContainer) {
 			this.agentProgressContainer.remove();
 			this.agentProgressContainer = null;
 		}
-	}
-
-	// Copy all selected note contents to clipboard
-	async copySelectedNotesContent(selectedPaths: string[]) {
-		const contents: string[] = [];
-
-		for (const path of selectedPaths) {
-			const file = this.app.vault.getAbstractFileByPath(path);
-			if (file instanceof TFile) {
-				try {
-					const content = await this.app.vault.cachedRead(file);
-					// Get note name without extension
-					const noteName = file.basename;
-					// Use clear separator format that won't be confused with markdown headers
-					contents.push(`========== NOTE: ${noteName} ==========\n\n${content}`);
-				} catch (e) {
-					console.error(`Failed to read ${path}:`, e);
-				}
-			}
-		}
-
-		if (contents.length === 0) {
-			new Notice('No notes to copy');
-			return;
-		}
-
-		const fullContent = contents.join('\n\n');
-		await navigator.clipboard.writeText(fullContent);
-		new Notice(`Copied ${contents.length} note(s) to clipboard`);
 	}
 
 	async showContextPreview() {
@@ -2634,10 +2312,11 @@ class AIAssistantView extends ItemView {
 		metadata?: {
 			activeFile?: string;
 			proposedEdits?: EditInstruction[];
-			editResults?: { success: number; failed: number; failures: Array<{ file: string; error: string }> };
+			editResults?: { success: number; failed: number; failures: Array<{ file: string; error: string }>; accepted?: number; rejected?: number; pending?: number };
 			tokenUsage?: TokenUsage;
 			model?: string;
 			webSources?: WebSource[];
+			notesRead?: string[];
 		}
 	) {
 		const message: ChatMessage = {
@@ -2650,7 +2329,8 @@ class AIAssistantView extends ItemView {
 			editResults: metadata?.editResults,
 			tokenUsage: metadata?.tokenUsage,
 			model: metadata?.model,
-			webSources: metadata?.webSources
+			webSources: metadata?.webSources,
+			notesRead: metadata?.notesRead
 		};
 		this.chatMessages.push(message);
 		this.renderMessage(message);
@@ -2691,31 +2371,14 @@ class AIAssistantView extends ItemView {
 				this
 			);
 
-			// Add web sources footer if available
-			if (message.webSources && message.webSources.length > 0) {
-				const sourcesEl = bubbleEl.createDiv({ cls: 'ai-chat-web-sources' });
-				sourcesEl.createDiv({ cls: 'ai-chat-web-sources-header', text: 'Web Sources' });
-				const sourcesList = sourcesEl.createEl('ul', { cls: 'ai-chat-web-sources-list' });
-				for (const source of message.webSources) {
-					const li = sourcesList.createEl('li');
-					const link = li.createEl('a', {
-						text: source.title,
-						href: source.url,
-						cls: 'ai-chat-web-source-link'
-					});
-					link.setAttr('target', '_blank');
-					link.setAttr('rel', 'noopener noreferrer');
-				}
-			}
-
 			// Add token usage footer if available and enabled
 			if (message.tokenUsage && this.plugin.settings.showTokenUsage) {
 				const usageEl = bubbleEl.createDiv({ cls: 'ai-chat-token-usage' });
 				usageEl.setText('Tokens: ' + formatTokenUsage(message.tokenUsage, message.model || this.plugin.settings.aiModel));
 			}
 		} else {
-			// Plain text for user messages
-			bubbleEl.setText(message.content);
+			// Wrap user text in a span so it's selectable in Electron
+			bubbleEl.createSpan({ text: message.content });
 		}
 	}
 
@@ -2806,10 +2469,8 @@ class AIAssistantView extends ItemView {
 
 		try {
 			const counts = await this.plugin.getContextNoteCountWithConfig(file, this.contextScopeConfig);
-			const context = await this.plugin.buildContextWithScopeConfig(file, '', this.contextScopeConfig);
-			const tokenEstimate = this.plugin.estimateTokens(context);
 
-			let summaryText = `${counts.included} note${counts.included !== 1 ? 's' : ''} · ~${tokenEstimate.toLocaleString()} tokens`;
+			let summaryText = `${counts.included} note${counts.included !== 1 ? 's' : ''}`;
 			if (counts.excluded > 0) {
 				summaryText += ` (${counts.excluded} restricted)`;
 			}
@@ -2830,18 +2491,17 @@ class AIAssistantView extends ItemView {
 				this.submitButton.removeClass('is-loading');
 			}
 		}
-		if (this.taskTextarea) {
-			this.taskTextarea.disabled = loading;
-		}
 	}
 
 	async handleSubmit() {
+		if (this.isLoading) return;
+
 		if (!this.taskText.trim()) {
 			new Notice('Please enter a message');
 			return;
 		}
 
-		const file = this.app.workspace.getActiveFile(); // May be null - handled per-agent
+		const file = this.app.workspace.getActiveFile(); // May be null
 
 		if (!this.plugin.settings.openaiApiKey) {
 			new Notice('Please set your OpenAI API key in settings');
@@ -2860,137 +2520,11 @@ class AIAssistantView extends ItemView {
 			this.autoResizeTextarea();
 		}
 
-		// Check that at least one agent is enabled
-		const { scout, web, task } = this.agentToggles;
-		if (!scout && !web && !task) {
-			new Notice('Enable at least one agent to send');
-			return;
-		}
-
 		this.setLoading(true);
-		// Show loading indicator only if Scout is not running (Scout shows its own progress)
-		const loadingEl = !scout ? this.addLoadingIndicator() : null;
+		const loadingEl = this.addLoadingIndicator();
 
 		try {
-			// Initialize pipeline context for tracking across phases
-			const pipelineContext: PipelineContext = {
-				tokenAccounting: {
-					scoutTokens: 0,
-					webTokens: 0,
-					taskTokens: 0,
-					totalTokens: 0
-				}
-			};
-
-			// Phase 1: Get context (Scout or manual)
-			let context: string;
-			let selectedPaths: string[] = [];
-			let selectedNotes: NoteSelectionMetadata[] = [];
-
-			if (scout) {
-				// Scout Agent explores the vault (works with or without active file)
-				const scoutResult = await this.runScoutAgentPhase(file, userMessage);
-
-				// Handle ask_user pause state
-				if (scoutResult.status === 'waiting_for_user' && scoutResult.userQuestion) {
-					// Store state and show question UI
-					this.pendingScoutState = {
-						resumeState: scoutResult._resumeState || '',
-						userMessage,
-						file
-					};
-					this.showUserClarificationUI(scoutResult.userQuestion);
-					this.setLoading(false);
-					return;
-				}
-
-				selectedPaths = scoutResult.selectedPaths;
-				selectedNotes = scoutResult.selectedNotes;
-				context = await this.buildContextFromPaths(selectedPaths, userMessage, scoutResult.findings);
-
-				// Populate pipeline context with Scout metadata
-				pipelineContext.scout = {
-					selectedNotes: scoutResult.selectedNotes,
-					reasoning: scoutResult.reasoning,
-					confidence: scoutResult.confidence,
-					explorationSummary: scoutResult.explorationSummary,
-					findings: scoutResult.findings || [],
-					tokensUsed: scoutResult.tokensUsed || 0
-				};
-				pipelineContext.tokenAccounting.scoutTokens = scoutResult.tokensUsed || 0;
-			} else {
-				// Manual context selection
-				if (file) {
-					const tokenLimit = this.plugin.settings.taskAgentTokenLimit;
-					const chatHistoryTokens = this.estimateChatHistoryTokens();
-
-					const contextResult = await this.plugin.buildContextWithTokenLimit(
-						file,
-						userMessage,
-						this.contextScopeConfig,
-						tokenLimit,
-						this.capabilities,
-						this.editableScope,
-						chatHistoryTokens
-					);
-
-					// Show notice if notes were removed
-					if (contextResult.removedNotes.length > 0) {
-						new Notice(
-							`Token limit exceeded. ${contextResult.removedNotes.length} note(s) removed from context.`,
-							5000
-						);
-					}
-
-					context = contextResult.context;
-				} else {
-					// No active file + no Scout = empty context (web-only or pure AI query)
-					context = '';
-					selectedPaths = [];
-				}
-			}
-
-			// Phase 2: Web Agent (if enabled)
-			let webResult: WebAgentResult | null = null;
-			if (web) {
-				webResult = await this.runWebAgentPhase(userMessage, context);
-
-				// Merge web context if search was performed
-				if (webResult && webResult.searchPerformed && webResult.webContext) {
-					context = this.mergeWebContext(context, webResult);
-				}
-
-				// Populate pipeline context with Web metadata (only if we got a result)
-				if (webResult) {
-					pipelineContext.web = {
-						searchPerformed: webResult.searchPerformed,
-						evaluationReasoning: webResult.evaluationReasoning,
-						searchQueries: webResult.searchQueries || [],
-						sources: webResult.sources.map(s => ({
-							...s,
-							fetchedAt: new Date().toISOString()
-						})),
-						tokensUsed: webResult.tokensUsed
-					};
-					pipelineContext.tokenAccounting.webTokens = webResult.tokensUsed;
-				}
-			}
-
-			// Phase 3: Task Agent (if enabled)
-			if (task) {
-				// Add loading indicator if not already showing
-				const taskLoadingEl = loadingEl || this.addLoadingIndicator();
-
-				try {
-					await this.handleEditModeWithWebSourcesAndContext(context, file?.path, webResult?.sources, pipelineContext, selectedPaths);
-				} finally {
-					if (!loadingEl) this.removeLoadingIndicator(taskLoadingEl);
-				}
-			} else {
-				// Scout and/or Web ran, but Task is off
-				// Display what was found without running Task Agent
-				this.displayAgentOnlyResults(selectedPaths, webResult);
-			}
+			await this.runAgentLoop(userMessage, file);
 		} catch (error) {
 			console.error('Submit error:', error);
 			this.removeLoadingIndicator(loadingEl);
@@ -2999,501 +2533,958 @@ class AIAssistantView extends ItemView {
 		} finally {
 			this.removeLoadingIndicator(loadingEl);
 			this.setLoading(false);
+			if (this.stopButton) this.stopButton.style.display = 'none';
+			this.agentAbortController = null;
 		}
 	}
 
-	// Build AgenticModeConfig from current settings
-	private buildAgenticConfig(): AgenticModeConfig {
-		return {
-			scoutModel: this.plugin.settings.agenticScoutModel === 'same'
-				? this.plugin.settings.aiModel
-				: this.plugin.settings.agenticScoutModel,
-			maxIterations: this.plugin.settings.agenticMaxIterations,
-			maxNotes: this.plugin.settings.agenticMaxNotes,
-			tokenLimit: this.plugin.settings.taskAgentTokenLimit,
-			showTokenBudget: this.plugin.settings.scoutShowTokenBudget
-		};
-	}
+	// Run the unified agent loop
+	private async runAgentLoop(userMessage: string, file: TFile | null) {
+		// Create abort controller for cancellation
+		this.agentAbortController = new AbortController();
+		if (this.stopButton) this.stopButton.style.display = '';
 
-	// Build ScoutToolConfig from current settings (gates semantic tools on embedding index)
-	private buildToolConfig(): ScoutToolConfig {
-		return {
-			listNotes: this.plugin.settings.scoutToolListNotes,
-			searchKeyword: this.plugin.settings.scoutToolSearchKeyword,
-			searchSemantic: this.plugin.settings.scoutToolSearchSemantic && !!this.plugin.embeddingIndex,
-			searchTaskRelevant: this.plugin.settings.scoutToolSearchTaskRelevant && !!this.plugin.embeddingIndex,
-			getLinks: this.plugin.settings.scoutToolGetLinks,
-			getLinksRecursive: this.plugin.settings.scoutToolGetLinksRecursive,
-			viewAllNotes: this.plugin.settings.scoutToolViewAllNotes,
-			exploreVault: this.plugin.settings.scoutToolExploreVault,
-			listAllTags: this.plugin.settings.scoutToolListAllTags,
-			askUser: this.plugin.settings.scoutToolAskUser,
-			keywordLimit: this.plugin.settings.agenticKeywordLimit,
-			semanticLimit: this.plugin.settings.scoutSemanticLimit,
-			listNotesLimit: this.plugin.settings.scoutListNotesLimit
-		};
-	}
-
-	// Run Scout Agent and return results (file is optional for vault-wide exploration)
-	async runScoutAgentPhase(file: TFile | null, userMessage: string): Promise<ContextAgentResult> {
+		// Create progress container
 		this.createAgentProgressContainer();
 
-		const agenticConfig = this.buildAgenticConfig();
-		const toolConfig = this.buildToolConfig();
-
-		// Get current file content if file exists, otherwise use empty string
-		const currentContent = file ? await this.app.vault.cachedRead(file) : '';
-
-		try {
-			const contextResult = await runContextAgent(
-				userMessage,
-				file,
-				currentContent,
-				agenticConfig,
-				this.app.vault,
-				this.app.metadataCache,
-				this.plugin.settings.excludedFolders,
-				this.plugin.embeddingIndex,
-				this.plugin.settings.openaiApiKey,
-				this.plugin.settings.embeddingModel,
-				toolConfig,
-				(event) => {
-					if (event.type === 'tool_call' || event.type === 'iteration') {
-						this.showAgentProgress(event.message, event.detail);
-					}
-				}
-			);
-
-			// Show Scout Agent completion status
-			this.completeAgentProgress(contextResult.selectedPaths.length, contextResult.reasoning, contextResult.selectedPaths, contextResult.findings);
-
-			return contextResult;
-		} catch (error) {
-			this.removeAgentProgress();
-			throw new Error(`Context agent failed: ${(error as Error).message}`);
-		}
-	}
-
-	// Display results when Task Agent is disabled
-	displayAgentOnlyResults(selectedPaths: string[], webResult: WebAgentResult | null) {
-		const file = this.app.workspace.getActiveFile();
-		const activeFilePath = file?.path || '';
-
-		let summary = '';
-
-		if (selectedPaths.length > 0) {
-			summary += `Scout Agent found ${selectedPaths.length} relevant note(s).`;
-		}
-
-		if (webResult && webResult.searchPerformed) {
-			if (summary) summary += ' ';
-			summary += `Web Agent found ${webResult.sources.length} source(s).`;
-		}
-
-		if (!summary) {
-			summary = 'No results found.';
-		}
-
-		this.addMessageToChat('assistant', summary, {
-			activeFile: activeFilePath,
-			webSources: webResult?.sources
-		});
-	}
-
-	// Show token warning modal and return true if user confirms, false if cancelled
-	async showTokenWarningModal(estimatedTokens: number, threshold: number): Promise<boolean> {
-		return new Promise((resolve) => {
-			const modal = new TokenWarningModal(this.app, estimatedTokens, threshold, (confirmed) => {
-				resolve(confirmed);
-			});
-			modal.open();
-		});
-	}
-
-	// Estimate tokens in chat history that will be included
-	estimateChatHistoryTokens(): number {
-		const historyLength = this.plugin.settings.chatHistoryLength;
-		if (historyLength === 0 || this.chatMessages.length <= 1) {
-			return 0;
-		}
-
-		// Get messages that would be included (same logic as buildMessagesWithHistory)
-		const historyMessages = this.chatMessages.slice(0, -1).slice(-historyLength);
-		let totalTokens = 0;
-
-		for (const msg of historyMessages) {
-			// Context switch messages
-			if (msg.type === 'context-switch') {
-				totalTokens += this.plugin.estimateTokens(
-					`[CONTEXT SWITCH: User navigated to note "${msg.content}" (${msg.activeFile})]`
-				);
-				continue;
-			}
-
-			// User messages
-			if (msg.role === 'user') {
-				let content = '';
-				if (msg.activeFile) content += `[User was viewing: ${msg.activeFile}]\n`;
-				content += msg.content;
-				totalTokens += this.plugin.estimateTokens(content);
+		// Build current file content
+		let currentFileContent: string | undefined;
+		let currentFilePath: string | undefined;
+		if (file) {
+			if (isFileExcluded(file.path, this.plugin.settings.excludedFolders)) {
+				new Notice('Active file is in an excluded folder — not sent to AI.');
 			} else {
-				// Assistant messages with edit details
-				let content = msg.content;
-				if (msg.proposedEdits && msg.proposedEdits.length > 0) {
-					content += '\n\n[EDITS I PROPOSED:]';
-					for (const edit of msg.proposedEdits) {
-						content += `\n- File: "${edit.file}", Position: "${edit.position}"`;
-					}
-				}
-				if (msg.editResults && (msg.editResults.success > 0 || msg.editResults.failed > 0)) {
-					content += `\n[EDIT RESULTS: ${msg.editResults.success} succeeded, ${msg.editResults.failed} failed]`;
-				}
-				totalTokens += this.plugin.estimateTokens(content);
+				const raw = await this.app.vault.cachedRead(file);
+				currentFileContent = stripPendingEditBlocks(raw, this.plugin.settings.pendingEditTag);
+				currentFilePath = file.path;
 			}
 		}
 
-		return totalTokens;
-	}
+		// Gather vault stats
+		const allFiles = this.app.vault.getMarkdownFiles();
+		const allFolders = new Set<string>();
+		for (const f of allFiles) {
+			if (f.parent) allFolders.add(f.parent.path);
+		}
+		const allTags = new Set<string>();
+		for (const f of allFiles) {
+			const cache = this.app.metadataCache.getFileCache(f);
+			if (cache?.frontmatter?.tags) {
+				const tags = cache.frontmatter.tags;
+				if (Array.isArray(tags)) tags.forEach((t: string) => allTags.add(t));
+				else if (typeof tags === 'string') allTags.add(tags);
+			}
+			if (cache?.tags) {
+				cache.tags.forEach(t => allTags.add(t.tag.replace(/^#/, '')));
+			}
+		}
 
-	buildMessagesWithHistory(systemPrompt: string, currentContext: string): Array<{role: string, content: string}> {
-		return buildMessagesFromHistory(
-			systemPrompt,
-			currentContext,
-			this.chatMessages,
-			this.plugin.settings.chatHistoryLength
-		);
-	}
-
-	// Web Agent progress container
-	private webAgentProgressContainer: HTMLDivElement | null = null;
-	private webAgentStepsContainer: HTMLDivElement | null = null;
-
-	async runWebAgentPhase(task: string, vaultContext: string): Promise<WebAgentResult | null> {
-		// Create Web Agent progress container
-		this.createWebAgentProgressContainer();
-
-		const webConfig: WebAgentConfig = {
-			searchApi: this.plugin.settings.webAgentSearchApi,
-			searchApiKey: this.plugin.settings.webAgentSearchApiKey,
-			snippetLimit: this.plugin.settings.webAgentSnippetLimit,
-			fetchLimit: this.plugin.settings.webAgentFetchLimit,
-			tokenBudget: this.plugin.settings.webAgentTokenBudget,
-			model: this.plugin.settings.agenticScoutModel === 'same'
-				? this.plugin.settings.aiModel
-				: this.plugin.settings.agenticScoutModel,
-			openaiApiKey: this.plugin.settings.openaiApiKey,
-			autoSearch: this.plugin.settings.webAgentAutoSearch,
-			minFetchPages: this.plugin.settings.webAgentMinFetchPages,
-			maxQueryRetries: this.plugin.settings.webAgentMaxQueryRetries
+		const input: AgentInput = {
+			task: userMessage,
+			currentFile: currentFileContent && currentFilePath ? { path: currentFilePath, content: currentFileContent } : undefined,
+			vaultStats: {
+				totalNotes: allFiles.length,
+				totalFolders: allFolders.size,
+				totalTags: allTags.size
+			},
+			chatHistory: this.chatMessages
 		};
 
-		try {
-			const result = await runWebAgent(
-				task,
-				vaultContext,
-				webConfig,
-				(event) => {
-					this.showWebAgentProgress(event.message, event.detail);
-				}
-			);
+		const webEnabled = this.isWebSearchConfigured();
 
-			// Show completion status
-			this.completeWebAgentProgress(result);
-
-			return result;
-		} catch (error) {
-			this.plugin.logger.error('WEB_AGENT', 'Web agent failed', error);
-			// Show error in progress container
-			this.showWebAgentProgress('Web search failed', (error as Error).message);
-			return null;
-		}
-	}
-
-	createWebAgentProgressContainer(): HTMLDivElement {
-		if (!this.chatContainer) {
-			throw new Error('Chat container not available');
-		}
-
-		this.webAgentProgressContainer = this.chatContainer.createDiv({ cls: 'ai-agent-progress-container ai-web-agent-progress' });
-
-		const headerEl = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-header' });
-		headerEl.createSpan({ cls: 'ai-agent-progress-icon', text: '\uD83C\uDF10' }); // Globe emoji
-		headerEl.createSpan({ cls: 'ai-agent-progress-title', text: ' Web Agent' });
-
-		// Create collapsible actions toggle
-		const actionsToggle = this.webAgentProgressContainer.createEl('details', { cls: 'ai-agent-actions-toggle' });
-		actionsToggle.open = true;
-		const actionsSummary = actionsToggle.createEl('summary');
-		actionsSummary.setText('Web research actions');
-
-		this.webAgentStepsContainer = actionsToggle.createDiv({ cls: 'ai-agent-steps-container' });
-
-		this.scrollChatToBottom();
-		return this.webAgentProgressContainer;
-	}
-
-	showWebAgentProgress(message: string, detail?: string) {
-		if (!this.webAgentStepsContainer) return;
-
-		const stepEl = this.webAgentStepsContainer.createDiv({ cls: 'ai-agent-progress-step' });
-		const bulletEl = stepEl.createSpan({ cls: 'ai-agent-progress-bullet' });
-		bulletEl.setText('\u2022');
-		const textEl = stepEl.createSpan({ cls: 'ai-agent-progress-text' });
-		textEl.setText(message);
-		if (detail) {
-			const detailEl = stepEl.createSpan({ cls: 'ai-agent-progress-detail' });
-			detailEl.setText(` \u2192 ${detail}`);
-		}
-
-		this.scrollChatToBottom();
-	}
-
-	completeWebAgentProgress(result: WebAgentResult) {
-		if (!this.webAgentProgressContainer) return;
-
-		// Add completed class
-		this.webAgentProgressContainer.addClass('completed');
-
-		const header = this.webAgentProgressContainer.querySelector('.ai-agent-progress-header');
-		if (header) {
-			header.empty();
-			if (result.searchPerformed) {
-				header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2713' });
-				header.createSpan({ cls: 'ai-agent-progress-title', text: ` Web research complete (${result.sources.length} sources)` });
-			} else {
-				header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2014' }); // Em dash
-				header.createSpan({ cls: 'ai-agent-progress-title', text: ' Web search skipped' });
-			}
-		}
-
-		// Collapse actions toggle
-		const actionsToggle = this.webAgentProgressContainer.querySelector('.ai-agent-actions-toggle') as HTMLDetailsElement;
-		if (actionsToggle) {
-			actionsToggle.open = false;
-		}
-
-		// Add sources list if search was performed
-		if (result.searchPerformed && result.sources.length > 0) {
-			const sourcesToggle = this.webAgentProgressContainer.createEl('details', { cls: 'ai-agent-notes-toggle' });
-			const sourcesSummary = sourcesToggle.createEl('summary');
-			sourcesSummary.setText(`Sources (${result.sources.length})`);
-			const sourcesContent = sourcesToggle.createDiv({ cls: 'ai-agent-notes-content' });
-
-			const sourcesList = sourcesContent.createEl('ul', { cls: 'ai-agent-notes-list' });
-			for (const source of result.sources) {
-				const sourceItem = sourcesList.createEl('li');
-				const sourceLink = sourceItem.createEl('a', {
-					text: source.title || source.url,
-					href: source.url,
-					cls: 'external-link'
-				});
-				sourceLink.setAttr('target', '_blank');
-				if (source.summary) {
-					sourceItem.createSpan({ text: ` - ${source.summary}`, cls: 'ai-agent-progress-detail' });
-				}
-			}
-
-			// Token usage
-			const tokenInfo = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-step' });
-			const contentTokens = result.contentTokens ?? result.tokensUsed;
-			const apiTokens = result.tokensUsed - contentTokens;
-			const tokenDetail = apiTokens > 0
-				? `Tokens: ${result.tokensUsed.toLocaleString()} (${apiTokens.toLocaleString()} API + ${contentTokens.toLocaleString()} content) / ${this.plugin.settings.webAgentTokenBudget.toLocaleString()} budget`
-				: `Content tokens: ${contentTokens.toLocaleString()} / ${this.plugin.settings.webAgentTokenBudget.toLocaleString()} budget`;
-			tokenInfo.createSpan({ text: tokenDetail, cls: 'ai-agent-progress-detail' });
-		}
-
-		// Show skip reason if not searched
-		if (!result.searchPerformed && result.skipReason) {
-			const skipInfo = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-step' });
-			skipInfo.createSpan({ text: result.skipReason, cls: 'ai-agent-progress-detail' });
-		}
-
-		// Show error if present
-		if (result.error) {
-			const errorInfo = this.webAgentProgressContainer.createDiv({ cls: 'ai-agent-progress-step ai-web-agent-error' });
-			errorInfo.createSpan({ text: `Error: ${result.error.message}`, cls: 'ai-agent-progress-detail' });
-		}
-
-		this.scrollChatToBottom();
-	}
-
-	mergeWebContext(vaultContext: string, webResult: WebAgentResult): string {
-		// Insert web context after the task section
-		const webSection = formatWebContextForPrompt(webResult);
-		if (!webSection) return vaultContext;
-
-		// Find the end of the task section and insert web context there
-		const taskEndMarker = CONTEXT_TASK_FOOTER;
-		const insertPos = vaultContext.indexOf(taskEndMarker);
-
-		if (insertPos !== -1) {
-			const afterTaskEnd = insertPos + taskEndMarker.length;
-			return vaultContext.substring(0, afterTaskEnd) + '\n\n' + webSection + vaultContext.substring(afterTaskEnd);
-		}
-
-		// Fallback: prepend web context
-		return webSection + '\n\n' + vaultContext;
-	}
-
-	// Handle edit mode with pipeline context and optional web sources
-	async handleEditModeWithWebSourcesAndContext(context: string, activeFilePath?: string, webSources?: WebSource[], pipelineContext?: PipelineContext, scoutSelectedPaths?: string[]) {
-		// Build agent configuration
-		const agentConfig: TaskAgentConfig = {
+		const config: AgentConfig = {
 			model: this.plugin.settings.aiModel,
 			apiKey: this.plugin.settings.openaiApiKey,
 			capabilities: this.capabilities,
 			editableScope: this.editableScope,
+			maxIterations: this.plugin.settings.agentMaxIterations,
+			maxTotalTokens: this.plugin.settings.agentMaxTokens,
+			webEnabled,
+			webSearchApi: this.plugin.settings.webAgentSearchApi,
+			webSearchApiKey: this.plugin.settings.webAgentSearchApiKey,
+			webSnippetLimit: this.plugin.settings.webAgentSnippetLimit,
+			webFetchLimit: this.plugin.settings.webAgentFetchLimit,
+			webTokenBudget: this.plugin.settings.webAgentTokenBudget,
+			disabledTools: this.plugin.settings.disabledTools || [],
+			whitelistedCommands: this.plugin.settings.whitelistedCommands || [],
 			customPrompts: {
-				character: this.plugin.settings.customPromptCharacter,
-				edit: this.plugin.settings.customPromptEdit
+				character: this.plugin.settings.customInstructions
 			},
 			chatHistoryLength: this.plugin.settings.chatHistoryLength,
 			debugMode: this.plugin.settings.debugMode
 		};
 
-		// Build agent input (with web sources and pipeline context)
-		const agentInput: TaskAgentInput = {
-			task: this.taskText,
-			context: context,
-			chatHistory: this.chatMessages,
-			webSources: webSources,
-			pipelineContext: pipelineContext
-		};
+		const callbacks = this.buildAgentCallbacks();
 
-		// Call the Task Agent
-		const agentResult = await runTaskAgent(
-			agentInput,
-			agentConfig,
-			this.plugin.logger
+		const result = await runAgent(
+			input,
+			config,
+			callbacks,
+			this.plugin.logger,
+			this.agentAbortController.signal
 		);
 
-		// Update pipeline token accounting
-		if (pipelineContext && agentResult.tokenUsage) {
-			pipelineContext.tokenAccounting.taskTokens = agentResult.tokenUsage.totalTokens;
-			pipelineContext.tokenAccounting.totalTokens =
-				pipelineContext.tokenAccounting.scoutTokens +
-				pipelineContext.tokenAccounting.webTokens +
-				pipelineContext.tokenAccounting.taskTokens;
+		// Update progress to completed state
+		this.completeAgentProgressFromResult(result);
+
+		// Build response message
+		this.buildAgentResponseMessage(result, file?.path);
+
+		// Render copy notes bubble if the agent collected notes
+		if (this.pendingCopyPaths.length > 0) {
+			this.renderCopyNotesBubble(this.pendingCopyPaths, this.pendingCopyContent);
+			this.pendingCopyPaths = [];
+			this.pendingCopyContent = '';
+		}
+	}
+
+	// Build AgentCallbacks bridging to Obsidian APIs
+	private buildAgentCallbacks(): AgentCallbacks {
+		const plugin = this.plugin;
+		const app = this.app;
+		const view = this;
+		const webEnabled = this.isWebSearchConfigured();
+
+		// Helper: find a note by exact path, partial path, filename, or basename
+		function findNoteByAnyName(pathOrName: string): TFile | null {
+			const files = app.vault.getMarkdownFiles();
+			return files.find(f =>
+				f.path === pathOrName ||
+				f.path.endsWith('/' + pathOrName) ||
+				f.name === pathOrName ||
+				f.basename === pathOrName ||
+				f.basename === pathOrName.replace(/\.md$/, '')
+			) || null;
 		}
 
-		// Handle agent error
-		if (!agentResult.success) {
-			throw new Error(agentResult.error || 'Task Agent failed');
+		return {
+			async readNote(path: string) {
+				const matchingFile = findNoteByAnyName(path);
+				if (!matchingFile) return null;
+				if (isFileExcluded(matchingFile.path, plugin.settings.excludedFolders)) {
+					return { content: '', path: matchingFile.path, lineCount: 0, excluded: true };
+				}
+				const content = await app.vault.cachedRead(matchingFile);
+				const cleanContent = stripPendingEditBlocks(content, plugin.settings.pendingEditTag);
+				const numbered = addLineNumbers(cleanContent);
+				return { content: numbered, path: matchingFile.path, lineCount: cleanContent.split('\n').length };
+			},
+
+			async searchKeyword(query: string, limit: number): Promise<KeywordResult[]> {
+				const files = app.vault.getMarkdownFiles();
+				const results: KeywordResult[] = [];
+				const queryLower = query.toLowerCase();
+
+				for (const file of files) {
+					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) continue;
+					if (results.length >= limit) break;
+
+					if (file.basename.toLowerCase().includes(queryLower)) {
+						results.push({ path: file.path, name: file.basename, matchType: 'title', matchContext: file.basename });
+						continue;
+					}
+
+					const cache = app.metadataCache.getFileCache(file);
+					if (cache?.headings) {
+						const headingMatch = cache.headings.find(h => h.heading.toLowerCase().includes(queryLower));
+						if (headingMatch) {
+							results.push({ path: file.path, name: file.basename, matchType: 'heading', matchContext: headingMatch.heading });
+							continue;
+						}
+					}
+
+					const content = await app.vault.cachedRead(file);
+					const contentLower = content.toLowerCase();
+					const idx = contentLower.indexOf(queryLower);
+					if (idx !== -1) {
+						const start = Math.max(0, idx - 50);
+						const end = Math.min(content.length, idx + query.length + 50);
+						results.push({ path: file.path, name: file.basename, matchType: 'content', matchContext: content.substring(start, end).trim() });
+					}
+				}
+				return results;
+			},
+
+			async searchSemantic(query: string, topK: number): Promise<SemanticSearchResult[]> {
+				if (!plugin.embeddingIndex) return [];
+				try {
+					const queryEmbedding = await generateEmbedding(
+						query.substring(0, 8000),
+						plugin.settings.openaiApiKey,
+						plugin.settings.embeddingModel
+					);
+					// Build exclude paths from excluded folders
+					const excludePaths = new Set<string>();
+					for (const chunk of plugin.embeddingIndex.chunks) {
+						if (isFileExcluded(chunk.notePath, plugin.settings.excludedFolders)) {
+							excludePaths.add(chunk.notePath);
+						}
+					}
+					return searchSemantic(queryEmbedding, plugin.embeddingIndex, excludePaths, topK, 0.3);
+				} catch {
+					return [];
+				}
+			},
+
+			async listNotes(folder?: string, limit?: number): Promise<NotePreview[]> {
+				const files = app.vault.getMarkdownFiles();
+				const maxResults = limit || 30;
+				const results: NotePreview[] = [];
+
+				for (const file of files) {
+					if (results.length >= maxResults) break;
+					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) continue;
+					if (folder && !file.path.startsWith(folder.endsWith('/') ? folder : folder + '/')) continue;
+
+					const cache = app.metadataCache.getFileCache(file);
+					const content = await app.vault.cachedRead(file);
+					const preview = content.substring(0, 200).trim();
+
+					results.push({
+						path: file.path,
+						name: file.basename,
+						preview,
+						tags: cache?.frontmatter?.tags ? (Array.isArray(cache.frontmatter.tags) ? cache.frontmatter.tags : [cache.frontmatter.tags]) : undefined
+					});
+				}
+				return results;
+			},
+
+			async getLinks(path: string, direction: string, depth?: number): Promise<LinkInfo[]> {
+				const file = app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) return [];
+
+				const results: LinkInfo[] = [];
+				const maxDepth = depth || 1;
+				const excluded = plugin.settings.excludedFolders;
+
+				if (direction === 'outgoing' || direction === 'both') {
+					const cache = app.metadataCache.getFileCache(file);
+					for (const link of cache?.links ?? []) {
+						const linkedFile = app.metadataCache.getFirstLinkpathDest(link.link, file.path);
+						if (linkedFile && linkedFile instanceof TFile) {
+							if (isFileExcluded(linkedFile.path, excluded)) continue;
+							results.push({ path: linkedFile.path, name: linkedFile.basename, direction: 'outgoing', depth: 1 });
+						}
+					}
+				}
+
+				if (direction === 'incoming' || direction === 'both') {
+					const backlinks = plugin.getBacklinkPaths(file);
+					for (const blPath of backlinks) {
+						if (isFileExcluded(blPath, excluded)) continue;
+						results.push({ path: blPath, name: blPath.split('/').pop()?.replace('.md', '') || blPath, direction: 'incoming', depth: 1 });
+					}
+				}
+
+				if (maxDepth > 1) {
+					const deepLinks = plugin.getLinkedFilesBFS(file, maxDepth);
+					const existing = new Set(results.map(r => r.path));
+					for (const p of deepLinks) {
+						if (!existing.has(p) && !isFileExcluded(p, excluded)) {
+							results.push({ path: p, name: p.split('/').pop()?.replace('.md', '') || p, direction: 'both', depth: maxDepth });
+						}
+					}
+				}
+
+				return results;
+			},
+
+			async exploreStructure(action: string, args: Record<string, unknown>): Promise<string> {
+				if (action === 'list_folder') {
+					const folder = (args.path as string) || '';
+					// Block browsing excluded folders entirely
+					if (folder && isFolderExcluded(folder, plugin.settings.excludedFolders)) {
+						return `Folder "${folder}" is excluded and cannot be browsed.`;
+					}
+					const abstractFolder = app.vault.getAbstractFileByPath(folder);
+					if (abstractFolder && abstractFolder instanceof TFolder) {
+						const children = abstractFolder.children
+							.filter(c => {
+								if (c instanceof TFile) return !isFileExcluded(c.path, plugin.settings.excludedFolders);
+								// Hide excluded subfolders
+								return !isFolderExcluded(c.path, plugin.settings.excludedFolders);
+							})
+							.map(c => c instanceof TFile ? `${c.name} (note)` : `${c.name}/ (folder)`)
+							.sort();
+						return children.join('\n') || 'Empty folder';
+					}
+					return `Folder not found: ${folder}`;
+				} else if (action === 'find_by_tag') {
+					const tag = (args.tag as string || '').replace(/^#/, '');
+					const matches: string[] = [];
+					for (const f of app.vault.getMarkdownFiles()) {
+						if (isFileExcluded(f.path, plugin.settings.excludedFolders)) continue;
+						const cache = app.metadataCache.getFileCache(f);
+						const fmTags = cache?.frontmatter?.tags;
+						const inlineTags = cache?.tags?.map(t => t.tag.replace(/^#/, ''));
+						const allFileTags = [
+							...(Array.isArray(fmTags) ? fmTags : fmTags ? [fmTags] : []),
+							...(inlineTags || [])
+						];
+						if (allFileTags.some(t => t === tag || t.startsWith(tag + '/'))) {
+							matches.push(f.path);
+						}
+					}
+					return matches.length > 0 ? matches.join('\n') : `No notes found with tag #${tag}`;
+				}
+				return `Unknown action: ${action}`;
+			},
+
+			async listTags(): Promise<{ tag: string; count: number }[]> {
+				const tagCounts = new Map<string, number>();
+				for (const f of app.vault.getMarkdownFiles()) {
+					if (isFileExcluded(f.path, plugin.settings.excludedFolders)) continue;
+					const cache = app.metadataCache.getFileCache(f);
+					const tags: string[] = [];
+					if (cache?.frontmatter?.tags) {
+						const fm = cache.frontmatter.tags;
+						if (Array.isArray(fm)) tags.push(...fm);
+						else if (typeof fm === 'string') tags.push(fm);
+					}
+					if (cache?.tags) {
+						cache.tags.forEach(t => tags.push(t.tag.replace(/^#/, '')));
+					}
+					for (const tag of tags) {
+						tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+					}
+				}
+				return [...tagCounts.entries()]
+					.map(([tag, count]) => ({ tag, count }))
+					.sort((a, b) => b.count - a.count);
+			},
+
+			async getAllNotes(includeMetadata?: boolean) {
+				return app.vault.getMarkdownFiles()
+					.filter(f => !isFileExcluded(f.path, plugin.settings.excludedFolders))
+					.map(f => {
+						const result: { path: string; aliases?: string[]; description?: string } = { path: f.path };
+						if (includeMetadata) {
+							const cache = app.metadataCache.getFileCache(f);
+							if (cache?.frontmatter) {
+								const aliases = cache.frontmatter.aliases || cache.frontmatter.alias;
+								if (aliases) result.aliases = Array.isArray(aliases) ? aliases : [aliases];
+								const desc = cache.frontmatter.description || cache.frontmatter.desc;
+								if (typeof desc === 'string') result.description = desc;
+							}
+						}
+						return result;
+					});
+			},
+
+			async getManualContext(): Promise<string> {
+				const scopeConfig = view.contextScopeConfig;
+				const hasConfig = scopeConfig.linkDepth > 0
+					|| scopeConfig.maxFolderNotes > 0
+					|| scopeConfig.semanticMatchCount > 0
+					|| (scopeConfig.manuallyAddedNotes && scopeConfig.manuallyAddedNotes.length > 0);
+
+				if (!hasConfig) {
+					return 'Manual context is empty. The user has not configured any context notes (all sliders are at 0 and no notes were manually added). You can still use search_vault or read_note to find relevant notes.';
+				}
+
+				const activeFile = app.workspace.getActiveFile();
+				if (!activeFile) {
+					return 'No active file is open. Manual context requires an active note as the starting point for linked/folder notes. Ask the user to open a note first.';
+				}
+
+				const context = await plugin.buildContextWithScopeConfig(activeFile, '', scopeConfig);
+				if (!context || context.trim().length === 0) {
+					return 'Manual context is configured but returned no content. The linked/folder/semantic notes may be empty.';
+				}
+
+				const configParts: string[] = [];
+				if (scopeConfig.linkDepth > 0) configParts.push(`link depth: ${scopeConfig.linkDepth}`);
+				if (scopeConfig.maxLinkedNotes > 0) configParts.push(`max linked: ${scopeConfig.maxLinkedNotes}`);
+				if (scopeConfig.maxFolderNotes > 0) configParts.push(`folder notes: ${scopeConfig.maxFolderNotes}`);
+				if (scopeConfig.semanticMatchCount > 0) configParts.push(`semantic matches: ${scopeConfig.semanticMatchCount}`);
+				if (scopeConfig.manuallyAddedNotes && scopeConfig.manuallyAddedNotes.length > 0) configParts.push(`manually added: ${scopeConfig.manuallyAddedNotes.length}`);
+
+				const header = `=== Manual Context (${configParts.join(', ')}) ===\n`;
+				return header + context;
+			},
+
+			webSearch: webEnabled ? async (query: string, limit: number) => {
+				const apiKey = plugin.settings.webAgentSearchApi === 'openai'
+					? plugin.settings.openaiApiKey
+					: plugin.settings.webAgentSearchApiKey;
+				return webSearch(query, plugin.settings.webAgentSearchApi, apiKey, limit);
+			} : undefined,
+
+			fetchPage: webEnabled ? async (url: string, maxTokens: number) => {
+				return fetchPage(url, maxTokens);
+			} : undefined,
+
+			async proposeEdit(edit: EditInstruction) {
+				const validated = await plugin.validateEdits([edit]);
+				if (validated[0]?.error) {
+					return { success: false, error: validated[0].error };
+				}
+
+				const activeFile = app.workspace.getActiveFile();
+				if (activeFile) {
+					plugin.filterEditsByRulesWithConfig(
+						validated,
+						activeFile,
+						view.editableScope,
+						view.capabilities,
+						view.contextScopeConfig
+					);
+				}
+
+				if (validated[0]?.error) {
+					return { success: false, error: validated[0].error };
+				}
+
+				if (edit.position === 'open') {
+					const navFile = validated[0]?.resolvedFile;
+					if (navFile) {
+						await app.workspace.getLeaf('tab').openFile(navFile);
+						return { success: true };
+					}
+					return { success: false, error: 'File not found' };
+				}
+
+				const result = await plugin.insertEditBlocks(validated);
+				return { success: result.success > 0, error: result.failed > 0 ? 'Some edits failed' : undefined };
+			},
+
+			async createNote(path: string, content: string) {
+				if (!view.capabilities.canCreate) {
+					return { success: false, error: 'Creating new files is not allowed (capability disabled)' };
+				}
+				if (isFileExcluded(path, plugin.settings.excludedFolders)) {
+					return { success: false, error: 'Cannot create notes in an excluded folder' };
+				}
+				try {
+					const folderPath = path.substring(0, path.lastIndexOf('/'));
+					if (folderPath) {
+						const folder = app.vault.getAbstractFileByPath(folderPath);
+						if (!folder) {
+							await app.vault.createFolder(folderPath);
+						}
+					}
+					const validated: ValidatedEdit[] = [{
+						instruction: { file: path, position: 'create', content },
+						resolvedFile: null,
+						currentContent: '',
+						newContent: content,
+						error: null,
+						isNewFile: true
+					}];
+					const result = await plugin.insertEditBlocks(validated);
+					return { success: result.success > 0, error: result.failed > 0 ? 'Failed to create note' : undefined };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async openNote(path: string) {
+				const matchingFile = findNoteByAnyName(path);
+				if (matchingFile) {
+					await app.workspace.getLeaf('tab').openFile(matchingFile);
+					return { success: true };
+				}
+				return { success: false, error: `Note not found: ${path}` };
+			},
+
+			async moveNote(from: string, to: string) {
+				if (isFileExcluded(from, plugin.settings.excludedFolders)) {
+					return { success: false, error: 'Note is in an excluded folder' };
+				}
+				const f = app.vault.getAbstractFileByPath(from);
+				if (!(f instanceof TFile)) {
+					return { success: false, error: `Note not found: ${from}` };
+				}
+				try {
+					const targetFolder = to.substring(0, to.lastIndexOf('/'));
+					if (targetFolder && !app.vault.getAbstractFileByPath(targetFolder)) {
+						await app.vault.createFolder(targetFolder);
+					}
+					await app.fileManager.renameFile(f, to);
+					return { success: true, newPath: to };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async updateProperties(path: string, props: Record<string, unknown>) {
+				if (isFileExcluded(path, plugin.settings.excludedFolders)) {
+					return { success: false, error: 'Note is in an excluded folder' };
+				}
+				const f = app.vault.getAbstractFileByPath(path);
+				if (!(f instanceof TFile)) {
+					return { success: false, error: `Note not found: ${path}` };
+				}
+				try {
+					await app.fileManager.processFrontMatter(f, (fm) => {
+						for (const [key, value] of Object.entries(props)) {
+							if (value === null) delete fm[key];
+							else fm[key] = value;
+						}
+					});
+					return { success: true };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async addTags(path: string, tags: string[]) {
+				if (isFileExcluded(path, plugin.settings.excludedFolders)) {
+					return { success: false, error: 'Note is in an excluded folder' };
+				}
+				const f = app.vault.getAbstractFileByPath(path);
+				if (!(f instanceof TFile)) {
+					return { success: false, error: `Note not found: ${path}` };
+				}
+				try {
+					await app.fileManager.processFrontMatter(f, (fm) => {
+						const existing = fm.tags || [];
+						const currentTags = Array.isArray(existing) ? existing : [existing];
+						const normalizedNew = tags.map(t => t.replace(/^#/, ''));
+						fm.tags = [...new Set([...currentTags, ...normalizedNew])];
+					});
+					return { success: true };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async linkNotes(source: string, target: string, context?: string) {
+				if (isFileExcluded(source, plugin.settings.excludedFolders)) {
+					return { success: false, error: 'Note is in an excluded folder' };
+				}
+				const sourceFile = app.vault.getAbstractFileByPath(source);
+				if (!(sourceFile instanceof TFile)) {
+					return { success: false, error: `Source note not found: ${source}` };
+				}
+				try {
+					let content = await app.vault.read(sourceFile);
+					const linkTarget = target.replace(/\.md$/, '');
+					const wikilink = `[[${linkTarget}]]`;
+
+					if (context) {
+						const headingIdx = content.indexOf(context);
+						if (headingIdx !== -1) {
+							const nextLineIdx = content.indexOf('\n', headingIdx);
+							if (nextLineIdx !== -1) {
+								content = content.substring(0, nextLineIdx + 1) + wikilink + '\n' + content.substring(nextLineIdx + 1);
+							} else {
+								content += '\n' + wikilink;
+							}
+						} else {
+							content += '\n\n' + wikilink;
+						}
+					} else {
+						content += '\n\n' + wikilink;
+					}
+
+					await app.vault.modify(sourceFile, content);
+					return { success: true };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async copyNotes(paths: string[]) {
+				const contents: string[] = [];
+				for (const p of paths) {
+					if (isFileExcluded(p, plugin.settings.excludedFolders)) continue;
+					const f = app.vault.getAbstractFileByPath(p);
+					if (f instanceof TFile) {
+						const content = await app.vault.cachedRead(f);
+						const noteName = f.basename;
+						contents.push(`--- New Note: "${noteName}" ---\n${content}`);
+					}
+				}
+				const combined = contents.join('\n\n');
+				// Store for the copy notes bubble (rendered after agent response)
+				view.pendingCopyContent = combined;
+				view.pendingCopyPaths = paths.filter(p => app.vault.getAbstractFileByPath(p) instanceof TFile);
+				return { content: combined, noteCount: contents.length };
+			},
+
+			// Advanced vault reading callbacks (always provided; filtering by disabledTools in agent.ts)
+			async getProperties(path: string) {
+				const file = findNoteByAnyName(path);
+				if (!file) return null;
+				if (isFileExcluded(file.path, plugin.settings.excludedFolders)) return null;
+				const cache = app.metadataCache.getFileCache(file);
+				const fm = cache?.frontmatter;
+				if (!fm) return {};
+				const props: Record<string, unknown> = {};
+				for (const [k, v] of Object.entries(fm)) {
+					if (k !== 'position') props[k] = v;
+				}
+				return props;
+			},
+
+			async getFileInfo(path: string) {
+				const file = findNoteByAnyName(path);
+				if (!file) return null;
+				if (isFileExcluded(file.path, plugin.settings.excludedFolders)) return null;
+				return {
+					created: file.stat.ctime,
+					modified: file.stat.mtime,
+					size: file.stat.size
+				};
+			},
+
+			async findDeadLinks(path?: string) {
+				const unresolvedLinks = (app.metadataCache as any).unresolvedLinks as Record<string, Record<string, number>> | undefined;
+				if (!unresolvedLinks) return [];
+				const results: Array<{ source: string; deadLink: string }> = [];
+				for (const [sourcePath, links] of Object.entries(unresolvedLinks)) {
+					if (isFileExcluded(sourcePath, plugin.settings.excludedFolders)) continue;
+					if (path) {
+						const file = findNoteByAnyName(path);
+						if (!file || file.path !== sourcePath) continue;
+					}
+					for (const deadLink of Object.keys(links)) {
+						results.push({ source: sourcePath, deadLink });
+					}
+				}
+				return results;
+			},
+
+			async queryNotes(filter: Record<string, unknown>, options: any) {
+				const files = app.vault.getMarkdownFiles();
+				let results: Array<{ path: string; matchingProperties?: Record<string, unknown>; modified?: number; created?: number }> = [];
+
+				for (const file of files) {
+					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) continue;
+
+					if (options.modified_after) {
+						const afterMs = new Date(options.modified_after).getTime();
+						if (file.stat.mtime < afterMs) continue;
+					}
+					if (options.modified_before) {
+						const beforeMs = new Date(options.modified_before).getTime();
+						if (file.stat.mtime > beforeMs) continue;
+					}
+
+					const cache = app.metadataCache.getFileCache(file);
+					const fm = cache?.frontmatter || {};
+
+					if (options.has_property && !(options.has_property in fm)) continue;
+
+					const filterKeys = Object.keys(filter);
+					if (filterKeys.length > 0) {
+						let allMatch = true;
+						for (const key of filterKeys) {
+							if (fm[key] === undefined || String(fm[key]) !== String(filter[key])) {
+								allMatch = false;
+								break;
+							}
+						}
+						if (!allMatch) continue;
+					}
+
+					const matchingProps: Record<string, unknown> = {};
+					for (const key of filterKeys) {
+						if (key in fm) matchingProps[key] = fm[key];
+					}
+					if (options.has_property && options.has_property in fm) {
+						matchingProps[options.has_property] = fm[options.has_property];
+					}
+
+					results.push({
+						path: file.path,
+						matchingProperties: Object.keys(matchingProps).length > 0 ? matchingProps : undefined,
+						modified: file.stat.mtime,
+						created: file.stat.ctime
+					});
+				}
+
+				if (options.sort_by === 'modified') {
+					results.sort((a, b) => (b.modified || 0) - (a.modified || 0));
+				} else if (options.sort_by === 'created') {
+					results.sort((a, b) => (b.created || 0) - (a.created || 0));
+				} else {
+					results.sort((a, b) => a.path.localeCompare(b.path));
+				}
+
+				results = results.slice(0, options.limit || 20);
+				return results;
+			},
+
+			// Destructive action callbacks (always provided; filtering by disabledTools in agent.ts)
+			async deleteNote(path: string) {
+				try {
+					const file = findNoteByAnyName(path);
+					if (!file) return { success: false, error: `Note not found: "${path}"` };
+					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) {
+						return { success: false, error: 'Note is in an excluded folder' };
+					}
+					// Don't delete immediately — show confirmation bubble
+					view.renderPendingDeletionBubble(file);
+					return { success: true };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async executeCommand(commandId: string) {
+				try {
+					const whitelist = plugin.settings.whitelistedCommands;
+					const allowed = whitelist.find((c: WhitelistedCommand) => c.id === commandId);
+					if (!allowed) {
+						return { success: false, error: `Command "${commandId}" is not whitelisted` };
+					}
+					await (app as any).commands.executeCommandById(commandId);
+					return { success: true };
+				} catch (e) {
+					return { success: false, error: (e as Error).message };
+				}
+			},
+
+			async listCommands() {
+				const commands = (app as any).commands.listCommands() as Array<{ id: string; name: string }>;
+				return commands.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }));
+			},
+
+			async askUser(question: string, choices?: string[]) {
+				return new Promise<string>((resolve) => {
+					view.showUserClarificationUI({ question, options: choices }, resolve);
+				});
+			},
+
+			onProgress(event: AgentProgressEvent) {
+				if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'thinking' || event.type === 'iteration') {
+					view.showAgentProgress(event.type, event.message, event.detail, event.fullContent);
+				}
+			}
+		};
+	}
+
+	// Update progress container when agent finishes
+	private completeAgentProgressFromResult(result: AgentResult) {
+		if (!this.agentProgressContainer) return;
+
+		this.agentProgressContainer.addClass('completed');
+
+		const header = this.agentProgressContainer.querySelector('.ai-agent-progress-header');
+		if (header) {
+			header.empty();
+			if (result.success) {
+				header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2713' });
+				header.createSpan({ cls: 'ai-agent-progress-title', text: ' Agent complete' });
+			} else {
+				header.createSpan({ cls: 'ai-agent-progress-icon', text: '\u2717' });
+				header.createSpan({ cls: 'ai-agent-progress-title', text: ' Agent failed' });
+			}
 		}
 
-		// Handle answer response (no edits)
-		if (!agentResult.edits || agentResult.edits.length === 0) {
-			this.addMessageToChat('assistant', agentResult.summary, {
-				activeFile: activeFilePath,
-				proposedEdits: [],
-				editResults: { success: 0, failed: 0, failures: [] },
-				tokenUsage: agentResult.tokenUsage,
-				model: this.plugin.settings.aiModel,
-				webSources
+		// Collapse the actions toggle
+		if (this.agentActionsToggle) {
+			this.agentActionsToggle.open = false;
+		}
+
+		// Append detail sections (notes, web sources, edits)
+		if (result.notesRead && result.notesRead.length > 0) {
+			const notesSection = this.agentProgressContainer.createEl('details', { cls: 'ai-chat-detail-section' });
+			const notesSummary = notesSection.createEl('summary');
+			notesSummary.setText(`${result.notesRead.length} note${result.notesRead.length !== 1 ? 's' : ''} accessed`);
+			const notesList = notesSection.createEl('ul', { cls: 'ai-chat-detail-list' });
+			for (const notePath of result.notesRead) {
+				const li = notesList.createEl('li');
+				li.createEl('a', {
+					text: notePath,
+					cls: 'internal-link',
+					href: notePath
+				});
+			}
+		}
+
+		if (result.webSourcesUsed && result.webSourcesUsed.length > 0) {
+			const sourcesSection = this.agentProgressContainer.createEl('details', { cls: 'ai-chat-detail-section' });
+			const sourcesSummary = sourcesSection.createEl('summary');
+			sourcesSummary.setText(`${result.webSourcesUsed.length} web source${result.webSourcesUsed.length !== 1 ? 's' : ''}`);
+			const sourcesList = sourcesSection.createEl('ul', { cls: 'ai-chat-detail-list' });
+			for (const source of result.webSourcesUsed) {
+				const li = sourcesList.createEl('li');
+				const link = li.createEl('a', {
+					text: source.title,
+					href: source.url,
+				});
+				link.setAttr('target', '_blank');
+				link.setAttr('rel', 'noopener noreferrer');
+			}
+		}
+
+		if (result.editsProposed && result.editsProposed.length > 0) {
+			const editCount = result.editsProposed.length;
+			const fileCount = new Set(result.editsProposed.map(e => e.file)).size;
+			const searchTag = this.plugin.settings.pendingEditTag;
+			const editsSection = this.agentProgressContainer.createEl('details', { cls: 'ai-chat-detail-section' });
+			const editsSummary = editsSection.createEl('summary');
+			editsSummary.setText(`${editCount} edit${editCount !== 1 ? 's' : ''} across ${fileCount} file${fileCount !== 1 ? 's' : ''}`);
+			const editsList = editsSection.createEl('ul', { cls: 'ai-chat-detail-list' });
+			for (const edit of result.editsProposed) {
+				const li = editsList.createEl('li');
+				li.setText(`${edit.file} \u2014 ${edit.position}`);
+			}
+			const viewAllLi = editsList.createEl('li');
+			const viewAllLink = viewAllLi.createEl('a', {
+				text: 'Search all pending edits',
 			});
+			viewAllLink.addEventListener('click', (e) => {
+				e.preventDefault();
+				const searchPlugin = (this.app as any).internalPlugins.getPluginById('global-search');
+				if (searchPlugin?.instance) {
+					searchPlugin.instance.openGlobalSearch(searchTag);
+				}
+			});
+		}
+
+		this.scrollChatToBottom();
+	}
+
+	// Build the response message from agent result
+	private buildAgentResponseMessage(result: AgentResult, activeFilePath?: string) {
+		if (!result.success && result.error) {
+			this.addMessageToChat('assistant', `Error: ${result.error}`, { activeFile: activeFilePath });
 			return;
 		}
 
-		// Validate edits (vault-specific operation)
-		let validatedEdits = await this.plugin.validateEdits(agentResult.edits);
-
-		const activeFile = this.app.workspace.getActiveFile();
-		if (activeFile) {
-			validatedEdits = this.plugin.filterEditsByRulesWithConfig(
-				validatedEdits,
-				activeFile,
-				this.editableScope,
-				this.capabilities,
-				this.contextScopeConfig,
-				scoutSelectedPaths
-			);
-		} else if (scoutSelectedPaths && scoutSelectedPaths.length > 0) {
-			// No active file — restrict edits to scout-selected paths only
-			const allowedPaths = new Set(scoutSelectedPaths);
-			for (const edit of validatedEdits) {
-				if (edit.error) continue;
-				const targetPath = edit.resolvedFile?.path || edit.instruction.file;
-				if (!allowedPaths.has(targetPath) && !edit.isNewFile) {
-					edit.error = `File "${edit.instruction.file}" is outside scout-selected context (no active file)`;
-				}
-			}
-		} else {
-			// No active file and no scout paths — reject all non-navigation, non-create edits
-			for (const edit of validatedEdits) {
-				if (edit.error) continue;
-				if (edit.instruction.position !== 'open' && !edit.isNewFile) {
-					edit.error = `Cannot edit "${edit.instruction.file}" — no active file and no scout context`;
-				}
-			}
-		}
-
-		const navigationEdits = validatedEdits.filter(e => !e.error && e.instruction.position === 'open');
-		const contentEdits = validatedEdits.filter(e => e.instruction.position !== 'open');
-
-		let navigationSuccess = 0;
-		for (const nav of navigationEdits) {
-			const navFile = nav.resolvedFile;
-			if (navFile) {
-				try {
-					await this.app.workspace.getLeaf('tab').openFile(navFile);
-					navigationSuccess++;
-				} catch (e) {
-					nav.error = `Failed to open note: ${(e as Error).message}`;
-				}
-			} else {
-				nav.error = `Note not found: ${nav.instruction.file}`;
-			}
-		}
-
-		const result = await this.plugin.insertEditBlocks(contentEdits);
-
-		const editCount = result.success;
-		const fileCount = new Set(validatedEdits.filter(e => !e.error).map(e => e.instruction.file)).size;
-		const failedEdits = validatedEdits.filter(e => e.error);
-
-		// Build compact response message with icons - separate edits and navigation
-		let responseText = '';
-		if (editCount > 0) {
-			responseText += `**✓ ${editCount}** edit${editCount !== 1 ? 's' : ''}`;
-		}
-		if (navigationSuccess > 0) {
-			if (responseText) responseText += ' • ';
-			responseText += `**📂 ${navigationSuccess}** opened`;
-		}
-		if (!responseText) {
-			responseText = '**✓ 0** edits';
-		}
-		responseText += ` • **📄 ${fileCount}** file${fileCount !== 1 ? 's' : ''}`;
-
-		const searchTag = this.plugin.settings.pendingEditTag;
-		responseText += ` • [View all](obsidian://search?query=${encodeURIComponent(searchTag)})`;
-
-		responseText += `\n\n${agentResult.summary}`;
-
-		if (failedEdits.length > 0) {
-			responseText += `\n\n**⚠ ${failedEdits.length} failed:**\n`;
-			for (const edit of failedEdits) {
-				responseText += `- ${edit.instruction.file}: ${edit.error}\n`;
-			}
-		}
-
-		this.addMessageToChat('assistant', responseText, {
+		// Use plain summary as markdown content; structured details rendered as DOM in renderMessage
+		this.addMessageToChat('assistant', result.summary, {
 			activeFile: activeFilePath,
-			proposedEdits: agentResult.edits,
+			proposedEdits: result.editsProposed,
 			editResults: {
-				success: editCount + navigationSuccess,
-				failed: result.failed + navigationEdits.filter(e => e.error).length,
-				failures: failedEdits.map(e => ({ file: e.instruction.file, error: e.error || 'Unknown error' }))
+				success: result.editsProposed.length,
+				failed: 0,
+				failures: [],
+				accepted: 0,
+				rejected: 0,
+				pending: result.editsProposed.length
 			},
-			tokenUsage: agentResult.tokenUsage,
+			tokenUsage: {
+				totalTokens: result.tokenUsage.total,
+				promptTokens: result.tokenUsage.promptTokens,
+				completionTokens: result.tokenUsage.completionTokens
+			},
 			model: this.plugin.settings.aiModel,
-			webSources
+			webSources: result.webSourcesUsed,
+			notesRead: result.notesRead
 		});
 	}
 
-	// Show user clarification UI when Scout asks a question
-	showUserClarificationUI(question: { question: string; options?: string[] }) {
+	// Update edit feedback in chat history when user accepts/rejects an edit
+	updateEditFeedbackInChat(filePath: string, action: 'accept' | 'reject') {
+		// Walk backwards to find the most recent assistant message with proposed edits matching the file
+		for (let i = this.chatMessages.length - 1; i >= 0; i--) {
+			const msg = this.chatMessages[i];
+			if (msg.role === 'assistant' && msg.proposedEdits && msg.editResults) {
+				const hasMatchingEdit = msg.proposedEdits.some(e => {
+					// Match by file path (could be basename match)
+					return e.file === filePath || filePath.endsWith('/' + e.file) || filePath.endsWith(e.file);
+				});
+				if (hasMatchingEdit) {
+					if (action === 'accept') {
+						msg.editResults.accepted = (msg.editResults.accepted || 0) + 1;
+					} else {
+						msg.editResults.rejected = (msg.editResults.rejected || 0) + 1;
+					}
+					msg.editResults.pending = Math.max(0, (msg.editResults.pending || 0) - 1);
+					break;
+				}
+			}
+		}
+	}
+
+	// Render a pending deletion confirmation bubble in the chat
+	private renderPendingDeletionBubble(file: TFile) {
+		if (!this.chatContainer) return;
+
+		const bubble = this.chatContainer.createDiv({ cls: 'ai-pending-deletion-bubble' });
+
+		// Header row: trash icon + file info
+		const header = bubble.createDiv({ cls: 'ai-pending-deletion-header' });
+		header.createSpan({ cls: 'ai-pending-deletion-icon', text: '\uD83D\uDDD1\uFE0F' });
+		const info = header.createDiv({ cls: 'ai-pending-deletion-info' });
+		info.createDiv({ cls: 'ai-pending-deletion-title', text: `Delete "${file.basename}"?` });
+		info.createDiv({ cls: 'ai-pending-deletion-path', text: file.path });
+
+		// Accept/Reject buttons
+		const actions = bubble.createDiv({ cls: 'ai-pending-deletion-actions' });
+
+		const rejectBtn = actions.createEl('button', { cls: 'ai-pending-deletion-reject', text: 'Keep' });
+		const acceptBtn = actions.createEl('button', { cls: 'ai-pending-deletion-accept', text: 'Delete' });
+
+		acceptBtn.addEventListener('click', async () => {
+			try {
+				await this.app.vault.trash(file, false);
+				bubble.empty();
+				bubble.addClass('ai-pending-deletion-resolved');
+				bubble.createSpan({ cls: 'ai-pending-deletion-result', text: `\uD83D\uDDD1\uFE0F "${file.basename}" moved to trash` });
+				new Notice(`"${file.basename}" moved to trash`);
+			} catch (e) {
+				new Notice(`Failed to delete: ${(e as Error).message}`);
+			}
+		});
+
+		rejectBtn.addEventListener('click', () => {
+			bubble.empty();
+			bubble.addClass('ai-pending-deletion-resolved');
+			bubble.createSpan({ cls: 'ai-pending-deletion-result', text: `"${file.basename}" \u2014 deletion rejected` });
+		});
+
+		this.scrollChatToBottom();
+	}
+
+	// Render a copy notes bubble in the chat
+	private renderCopyNotesBubble(paths: string[], content: string) {
+		if (!this.chatContainer) return;
+
+		const bubble = this.chatContainer.createDiv({ cls: 'ai-copy-notes-bubble' });
+
+		// Header row: icon + title + copy button
+		const header = bubble.createDiv({ cls: 'ai-copy-notes-header' });
+		header.createSpan({ cls: 'ai-copy-notes-icon', text: '\uD83D\uDCCB' });
+		header.createSpan({ cls: 'ai-copy-notes-title', text: `Collected Notes (${paths.length})` });
+
+		const copyBtn = header.createEl('button', { cls: 'ai-copy-notes-btn', text: 'Copy to Clipboard' });
+		copyBtn.addEventListener('click', async () => {
+			try {
+				await navigator.clipboard.writeText(content);
+				new Notice(`Copied ${paths.length} note(s) to clipboard`);
+				copyBtn.setText('Copied!');
+				copyBtn.addClass('copied');
+				setTimeout(() => {
+					copyBtn.setText('Copy to Clipboard');
+					copyBtn.removeClass('copied');
+				}, 2000);
+			} catch {
+				new Notice('Failed to copy to clipboard');
+			}
+		});
+
+		// Collapsible note list
+		const details = bubble.createEl('details', { cls: 'ai-copy-notes-toggle' });
+		details.createEl('summary', { text: 'Show notes' });
+
+		const listEl = details.createDiv({ cls: 'ai-copy-notes-list' });
+
+		// Render each note as a clickable wikilink using MarkdownRenderer
+		const markdownLines = paths.map(p => {
+			const name = p.replace(/\.md$/, '').split('/').pop() || p;
+			return `- [[${name}]]`;
+		}).join('\n');
+
+		MarkdownRenderer.render(
+			this.app,
+			markdownLines,
+			listEl,
+			this.getSourcePath(),
+			this
+		);
+
+		this.scrollChatToBottom();
+	}
+
+	// Show user clarification UI when agent asks a question
+	showUserClarificationUI(question: { question: string; options?: string[] }, resolve?: (answer: string) => void) {
 		// Remove any existing clarification UI
 		this.hideClarificationUI();
 
@@ -3503,7 +3494,7 @@ class AIAssistantView extends ItemView {
 
 		// Header
 		const header = this.clarificationContainer.createDiv({ cls: 'ai-clarification-header' });
-		header.createSpan({ text: 'Scout needs clarification:', cls: 'ai-clarification-title' });
+		header.createSpan({ text: 'Agent needs clarification:', cls: 'ai-clarification-title' });
 
 		// Question text
 		const questionEl = this.clarificationContainer.createDiv({ cls: 'ai-clarification-question' });
@@ -3519,7 +3510,8 @@ class AIAssistantView extends ItemView {
 					text: `${index + 1}. ${option}`
 				});
 				optionBtn.addEventListener('click', () => {
-					this.handleClarificationResponse(option, index + 1);
+					this.hideClarificationUI();
+					if (resolve) resolve(option);
 				});
 			});
 		}
@@ -3540,7 +3532,8 @@ class AIAssistantView extends ItemView {
 		const handleSend = () => {
 			const value = input.value.trim();
 			if (value) {
-				this.handleClarificationResponse(value);
+				this.hideClarificationUI();
+				if (resolve) resolve(value);
 			}
 		};
 
@@ -3566,176 +3559,6 @@ class AIAssistantView extends ItemView {
 		}
 	}
 
-	// Handle user's response to clarification question
-	async handleClarificationResponse(answer: string, selectedOption?: number) {
-		if (!this.pendingScoutState) {
-			console.error('No pending scout state to resume');
-			return;
-		}
-
-		// Hide the clarification UI
-		this.hideClarificationUI();
-
-		const { resumeState, userMessage, file } = this.pendingScoutState;
-		this.pendingScoutState = null;
-
-		this.setLoading(true);
-
-		try {
-			const agenticConfig = this.buildAgenticConfig();
-			const toolConfig = this.buildToolConfig();
-
-			const currentContent = file ? await this.app.vault.cachedRead(file) : '';
-
-			// Continue the scout agent with user's response
-			const scoutResult = await continueContextAgent(
-				resumeState,
-				{ answer, selectedOption },
-				userMessage,
-				file,
-				currentContent,
-				agenticConfig,
-				this.app.vault,
-				this.app.metadataCache,
-				this.plugin.settings.excludedFolders,
-				this.plugin.embeddingIndex,
-				this.plugin.settings.openaiApiKey,
-				this.plugin.settings.embeddingModel,
-				toolConfig,
-				(event) => {
-					if (event.type === 'tool_call' || event.type === 'iteration') {
-						this.showAgentProgress(event.message, event.detail);
-					}
-				}
-			);
-
-			// Check if still waiting (another ask_user)
-			if (scoutResult.status === 'waiting_for_user' && scoutResult.userQuestion) {
-				this.pendingScoutState = {
-					resumeState: scoutResult._resumeState || '',
-					userMessage,
-					file
-				};
-				this.showUserClarificationUI(scoutResult.userQuestion);
-				this.setLoading(false);
-				return;
-			}
-
-			// Scout complete - continue with the rest of the pipeline
-			this.completeAgentProgress(scoutResult.selectedPaths.length, scoutResult.reasoning, scoutResult.selectedPaths, scoutResult.findings);
-
-			// Build pipeline context
-			const pipelineContext: PipelineContext = {
-				scout: {
-					selectedNotes: scoutResult.selectedNotes,
-					reasoning: scoutResult.reasoning,
-					confidence: scoutResult.confidence,
-					explorationSummary: scoutResult.explorationSummary,
-					findings: scoutResult.findings || [],
-					tokensUsed: scoutResult.tokensUsed || 0
-				},
-				tokenAccounting: {
-					scoutTokens: scoutResult.tokensUsed || 0,
-					webTokens: 0,
-					taskTokens: 0,
-					totalTokens: scoutResult.tokensUsed || 0
-				}
-			};
-
-			// Build context
-			const context = await this.buildContextFromPaths(scoutResult.selectedPaths, userMessage, scoutResult.findings);
-
-			// Phase 2: Web Agent (if enabled)
-			let webResult: WebAgentResult | null = null;
-			if (this.agentToggles.web) {
-				webResult = await this.runWebAgentPhase(userMessage, context);
-
-				// Merge web context if search was performed
-				let finalContext = context;
-				if (webResult && webResult.searchPerformed && webResult.webContext) {
-					finalContext = this.mergeWebContext(context, webResult);
-				}
-
-				// Populate pipeline context with Web metadata (only if we got a result)
-				if (webResult) {
-					pipelineContext.web = {
-						searchPerformed: webResult.searchPerformed,
-						evaluationReasoning: webResult.evaluationReasoning,
-						searchQueries: webResult.searchQueries || [],
-						sources: webResult.sources.map(s => ({
-							...s,
-							fetchedAt: new Date().toISOString()
-						})),
-						tokensUsed: webResult.tokensUsed
-					};
-					pipelineContext.tokenAccounting.webTokens = webResult.tokensUsed;
-				}
-
-				// Use final context for task agent
-				if (this.agentToggles.task) {
-					await this.handleEditModeWithWebSourcesAndContext(finalContext, file?.path, webResult?.sources, pipelineContext, scoutResult.selectedPaths);
-				} else {
-					this.displayAgentOnlyResults(scoutResult.selectedPaths, webResult);
-				}
-			} else if (this.agentToggles.task) {
-				// No web agent, but task agent enabled
-				await this.handleEditModeWithWebSourcesAndContext(context, file?.path, undefined, pipelineContext, scoutResult.selectedPaths);
-			} else {
-				// Only scout ran
-				this.displayAgentOnlyResults(scoutResult.selectedPaths, null);
-			}
-		} catch (error) {
-			console.error('Clarification response error:', error);
-			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file?.path });
-		} finally {
-			this.setLoading(false);
-		}
-	}
-
-	// Build context string from explicit list of file paths
-	async buildContextFromPaths(paths: string[], task: string, findings?: ScoutFinding[]): Promise<string> {
-		const parts: string[] = [];
-
-		parts.push(CONTEXT_TASK_HEADER);
-		parts.push(task);
-		parts.push(CONTEXT_TASK_FOOTER);
-		parts.push('');
-
-		// Inject scout findings if present
-		const findingsBlock = buildScoutFindingsBlock(findings || []);
-		if (findingsBlock) {
-			parts.push(findingsBlock);
-			parts.push('');
-		}
-
-		parts.push(CONTEXT_DATA_HEADER);
-		parts.push('');
-
-		let isFirst = true;
-		for (const path of paths) {
-			if (this.plugin.isPathExcluded(path)) {
-				this.plugin.logger.warn('SECURITY', `Skipped excluded path in buildContextFromPaths: ${path}`);
-				continue;
-			}
-
-			const file = this.app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) continue;
-
-			const content = await this.app.vault.cachedRead(file);
-			const cleanContent = stripPendingEditBlocks(content, this.plugin.settings.pendingEditTag);
-			const label = isFirst ? 'Current Note' : 'Context Note';
-			parts.push(`--- FILE: "${file.name}" (${label}: "${file.basename}") ---`);
-			parts.push(addLineNumbers(cleanContent));
-			parts.push('--- END FILE ---');
-			parts.push('');
-
-			isFirst = false;
-		}
-
-		parts.push(CONTEXT_DATA_FOOTER);
-
-		return parts.join('\n');
-	}
 
 	async onClose() {
 		// Cleanup
@@ -3745,6 +3568,11 @@ class AIAssistantView extends ItemView {
 // Settings Tab
 class AIAssistantSettingTab extends PluginSettingTab {
 	plugin: MyPlugin;
+	// Conditional section elements
+	private editRulesEl: HTMLElement | null = null;
+	private webSearchEl: HTMLElement | null = null;
+	private cmdWhitelistEl: HTMLElement | null = null;
+	private toolToggleWrapper: HTMLElement | null = null;
 
 	constructor(app: App, plugin: MyPlugin) {
 		super(app, plugin);
@@ -3786,29 +3614,19 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.addOption('gpt-5', 'gpt-5 (reasoning)')
 				.addOption('gpt-5.1', 'gpt-5.1')
 				.addOption('gpt-5.2', 'gpt-5.2')
+				.addOption('gpt-4.1-nano', 'gpt-4.1-nano')
+				.addOption('gpt-4.1-mini', 'gpt-4.1-mini')
+				.addOption('gpt-4.1', 'gpt-4.1')
 				.addOption('gpt-4o-mini', 'gpt-4o-mini')
 				.addOption('gpt-4o', 'gpt-4o')
 				.addOption('o1-mini', 'o1-mini')
 				.addOption('o1', 'o1')
 				.addOption('o3-mini', 'o3-mini')
+				.addOption('o3', 'o3')
+				.addOption('o4-mini', 'o4-mini')
 				.setValue(this.plugin.settings.aiModel)
 				.onChange(async (value) => {
 					this.plugin.settings.aiModel = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('Scout Agent Model')
-			.setDesc('Model for agentic mode context exploration. Use a fast model to reduce latency.')
-			.addDropdown(dropdown => dropdown
-				.addOption('same', 'Same as main model')
-				.addOption('gpt-5-nano', 'gpt-5-nano (fastest, cheapest)')
-				.addOption('gpt-5-mini', 'gpt-5-mini (fast)')
-				.addOption('gpt-4o-mini', 'gpt-4o-mini')
-				.addOption('gpt-4o', 'gpt-4o')
-				.setValue(this.plugin.settings.agenticScoutModel)
-				.onChange(async (value) => {
-					this.plugin.settings.agenticScoutModel = value;
 					await this.plugin.saveSettings();
 				}));
 
@@ -3826,7 +3644,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		// Search API settings (for Web Agent)
 		containerEl.createEl('p', {
-			text: 'Web search is optional. Configure a search API to enable the Web toggle in chat.',
+			text: 'Web search is optional. Configure a search API to enable web_search and read_webpage tools.',
 			cls: 'setting-item-description',
 		}).style.marginBottom = '8px';
 
@@ -3872,7 +3690,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		// Reindex button and status
 		containerEl.createEl('p', {
-			text: 'Embeddings enable semantic (concept-based) search in manual context and Scout Agent. This is optional — the plugin works fully without it.',
+			text: 'Embeddings enable semantic (concept-based) search. This is optional — the plugin works fully without it.',
 			cls: 'setting-item-description',
 		}).style.marginBottom = '8px';
 
@@ -3896,35 +3714,19 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			cls: 'setting-item-description'
 		});
 
-		// AI Personality - full-width textarea
-		const personalityContainer = containerEl.createDiv({ cls: 'ai-settings-textarea-container' });
-		personalityContainer.createEl('div', { text: 'AI Personality', cls: 'setting-item-name' });
-		personalityContainer.createEl('div', {
-			text: 'Optional: Describe the AI\'s character or tone.',
+		// Custom Instructions - full-width textarea
+		const instructionsContainer = containerEl.createDiv({ cls: 'ai-settings-textarea-container' });
+		instructionsContainer.createEl('div', { text: 'Custom Instructions', cls: 'setting-item-name' });
+		instructionsContainer.createEl('div', {
+			text: 'Optional: Custom instructions for the AI (personality, tone, edit preferences, etc.)',
 			cls: 'setting-item-description'
 		});
-		const personalityTextarea = personalityContainer.createEl('textarea', {
-			placeholder: 'e.g., "Be concise and direct" or "Use a friendly, helpful tone"'
+		const instructionsTextarea = instructionsContainer.createEl('textarea', {
+			placeholder: 'e.g., "Be concise and direct" or "Prefer minimal edits"'
 		});
-		personalityTextarea.value = this.plugin.settings.customPromptCharacter;
-		personalityTextarea.addEventListener('change', async () => {
-			this.plugin.settings.customPromptCharacter = personalityTextarea.value;
-			await this.plugin.saveSettings();
-		});
-
-		// Edit Instructions - full-width textarea
-		const editInstrContainer = containerEl.createDiv({ cls: 'ai-settings-textarea-container' });
-		editInstrContainer.createEl('div', { text: 'Task Agent Instructions', cls: 'setting-item-name' });
-		editInstrContainer.createEl('div', {
-			text: 'Optional: Preferences for how edits and responses should be made.',
-			cls: 'setting-item-description'
-		});
-		const editInstrTextarea = editInstrContainer.createEl('textarea', {
-			placeholder: 'e.g., "Make minimal changes" or "Keep answers brief"'
-		});
-		editInstrTextarea.value = this.plugin.settings.customPromptEdit;
-		editInstrTextarea.addEventListener('change', async () => {
-			this.plugin.settings.customPromptEdit = editInstrTextarea.value;
+		instructionsTextarea.value = this.plugin.settings.customInstructions;
+		instructionsTextarea.addEventListener('change', async () => {
+			this.plugin.settings.customInstructions = instructionsTextarea.value;
 			await this.plugin.saveSettings();
 		});
 
@@ -4011,85 +3813,9 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				}));
 
 		// ============================================
-		// SECTION 5: Token Estimations & Limits
+		// SECTION 5: Token & Display
 		// ============================================
-		containerEl.createEl('h3', { text: 'Token Estimations & Limits' });
-
-		const tokenDisclaimer = containerEl.createEl('p', {
-			cls: 'setting-item-description',
-			text: 'Token estimates are approximate and should not be relied upon for precise cost calculations.'
-		});
-		tokenDisclaimer.style.marginBottom = '12px';
-		tokenDisclaimer.style.fontStyle = 'italic';
-		tokenDisclaimer.style.opacity = '0.8';
-
-		// Token limit setting with minimum validation
-		const tokenLimitSetting = new Setting(containerEl)
-			.setName('Task Agent Token Limit')
-			.setDesc(`Hard limit for context tokens. Notes are removed (least important first) if exceeded. Minimum: ${MINIMUM_TOKEN_LIMIT}`);
-
-		let tokenLimitWarning: HTMLDivElement | null = null;
-
-		tokenLimitSetting.addText(text => {
-			text.setPlaceholder('10000')
-				.setValue(this.plugin.settings.taskAgentTokenLimit.toString())
-				.onChange(async (value) => {
-					const num = parseInt(value, 10);
-					if (isNaN(num) || num <= 0) return;
-
-					// Hide any existing warning
-					if (tokenLimitWarning) {
-						tokenLimitWarning.remove();
-						tokenLimitWarning = null;
-					}
-
-					if (num < MINIMUM_TOKEN_LIMIT) {
-						// Show warning and auto-correct
-						tokenLimitWarning = tokenLimitSetting.settingEl.createDiv({ cls: 'ai-settings-warning' });
-						tokenLimitWarning.setText(`Value too low. Auto-corrected to minimum (${MINIMUM_TOKEN_LIMIT}).`);
-						this.plugin.settings.taskAgentTokenLimit = MINIMUM_TOKEN_LIMIT;
-						text.setValue(MINIMUM_TOKEN_LIMIT.toString());
-					} else {
-						this.plugin.settings.taskAgentTokenLimit = num;
-					}
-					await this.plugin.saveSettings();
-				});
-			return text;
-		});
-
-		// Scout agent token limit with minimum validation
-		const scoutTokenLimitSetting = new Setting(containerEl)
-			.setName('Scout Agent Token Limit per Iteration')
-			.setDesc(`Maximum tokens per scout agent iteration in agentic mode. Minimum: ${MINIMUM_TOKEN_LIMIT}`);
-
-		let scoutTokenWarning: HTMLDivElement | null = null;
-
-		scoutTokenLimitSetting.addText(text => {
-			text.setPlaceholder('10000')
-				.setValue(this.plugin.settings.agenticMaxTokensPerIteration.toString())
-				.onChange(async (value) => {
-					const num = parseInt(value, 10);
-					if (isNaN(num) || num <= 0) return;
-
-					// Hide any existing warning
-					if (scoutTokenWarning) {
-						scoutTokenWarning.remove();
-						scoutTokenWarning = null;
-					}
-
-					if (num < MINIMUM_TOKEN_LIMIT) {
-						// Show warning and auto-correct
-						scoutTokenWarning = scoutTokenLimitSetting.settingEl.createDiv({ cls: 'ai-settings-warning' });
-						scoutTokenWarning.setText(`Value too low. Auto-corrected to minimum (${MINIMUM_TOKEN_LIMIT}).`);
-						this.plugin.settings.agenticMaxTokensPerIteration = MINIMUM_TOKEN_LIMIT;
-						text.setValue(MINIMUM_TOKEN_LIMIT.toString());
-					} else {
-						this.plugin.settings.agenticMaxTokensPerIteration = num;
-					}
-					await this.plugin.saveSettings();
-				});
-			return text;
-		});
+		containerEl.createEl('h3', { text: 'Token & Display' });
 
 		new Setting(containerEl)
 			.setName('Show token usage & cost estimate')
@@ -4123,7 +3849,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.defaultLinkDepth = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('focused');
+					this.plugin.notifySettingsChanged('context');
 				}));
 
 		new Setting(focusedContent)
@@ -4136,7 +3862,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.defaultMaxLinkedNotes = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('focused');
+					this.plugin.notifySettingsChanged('context');
 				}));
 
 		new Setting(focusedContent)
@@ -4149,7 +3875,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.defaultMaxFolderNotes = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('focused');
+					this.plugin.notifySettingsChanged('context');
 				}));
 
 		new Setting(focusedContent)
@@ -4162,7 +3888,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.defaultSemanticMatchCount = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('focused');
+					this.plugin.notifySettingsChanged('context');
 				}));
 
 		new Setting(focusedContent)
@@ -4175,312 +3901,50 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.defaultSemanticMinSimilarity = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('focused');
+					this.plugin.notifySettingsChanged('context');
 				}));
 
-		// 6b: Scout Agent
-		const scoutDefaultsEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
-		const scoutSummary = scoutDefaultsEl.createEl('summary');
-		scoutSummary.setText('Scout Agent');
+		// 6b: Agent
+		const agentEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const agentSummary = agentEl.createEl('summary');
+		agentSummary.setText('Agent');
 
-		const scoutContent = scoutDefaultsEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+		const agentContent = agentEl.createDiv({ cls: 'ai-settings-collapsible-content' });
 
-		new Setting(scoutContent)
-			.setName('Max Exploration Rounds')
-			.setDesc('Maximum tool-calling iterations for context agent (2-10)')
+		new Setting(agentContent)
+			.setName('Max Iterations')
+			.setDesc('Maximum think-act-observe rounds the agent can take (5-20)')
 			.addSlider(slider => slider
-				.setLimits(2, 10, 1)
-				.setValue(this.plugin.settings.agenticMaxIterations)
+				.setLimits(5, 20, 1)
+				.setValue(this.plugin.settings.agentMaxIterations)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
-					this.plugin.settings.agenticMaxIterations = value;
+					this.plugin.settings.agentMaxIterations = value;
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(scoutContent)
-			.setName('Max Notes to Select')
-			.setDesc('Maximum notes the context agent can include (3-50)')
+		new Setting(agentContent)
+			.setName('Total Token Budget')
+			.setDesc('Maximum total tokens across all rounds (20000-500000)')
 			.addSlider(slider => slider
-				.setLimits(3, 50, 1)
-				.setValue(this.plugin.settings.agenticMaxNotes)
+				.setLimits(20000, 500000, 10000)
+				.setValue(this.plugin.settings.agentMaxTokens)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
-					this.plugin.settings.agenticMaxNotes = value;
+					this.plugin.settings.agentMaxTokens = value;
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(scoutContent)
-			.setName('Keyword Search Limit')
-			.setDesc('Maximum results for keyword search tool (3-20)')
-			.addSlider(slider => slider
-				.setLimits(3, 20, 1)
-				.setValue(this.plugin.settings.agenticKeywordLimit)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.agenticKeywordLimit = value;
-					await this.plugin.saveSettings();
-				}));
+		// 6b-ii: Tool Toggles (all tools including advanced, in pill groups)
+		this.toolToggleWrapper = agentContent.createDiv({ cls: 'ai-tool-toggles' });
+		this.renderToolTogglePills(this.toolToggleWrapper);
 
-		new Setting(scoutContent)
-			.setName('Semantic Search Limit')
-			.setDesc('Maximum results for semantic search tools (3-20)')
-			.addSlider(slider => slider
-				.setLimits(3, 20, 1)
-				.setValue(this.plugin.settings.scoutSemanticLimit)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.scoutSemanticLimit = value;
-					await this.plugin.saveSettings();
-				}));
+		// 6c: Edit Rules (conditional — hidden when edit_note is disabled)
+		this.editRulesEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const editRulesSummary = this.editRulesEl.createEl('summary');
+		editRulesSummary.setText('Edit Rules');
 
-		new Setting(scoutContent)
-			.setName('List Notes Limit')
-			.setDesc('Maximum results for list_notes tool (10-50)')
-			.addSlider(slider => slider
-				.setLimits(10, 50, 1)
-				.setValue(this.plugin.settings.scoutListNotesLimit)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.scoutListNotesLimit = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(scoutContent)
-			.setName('Show Token Budget')
-			.setDesc('Include token budget information in scout agent prompts to help with note selection')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.scoutShowTokenBudget)
-				.onChange(async (value) => {
-					this.plugin.settings.scoutShowTokenBudget = value;
-					await this.plugin.saveSettings();
-				}));
-
-		// Scout tool toggles
-		scoutContent.createEl('div', { text: 'Available Tools', cls: 'setting-item-name' });
-		scoutContent.createEl('div', {
-			text: 'Enable or disable individual scout agent tools. update_selection and fetch_note are always enabled.',
-			cls: 'setting-item-description'
-		});
-
-		const toolsGrid = scoutContent.createDiv({ cls: 'ai-settings-tools-grid' });
-
-		// List Notes toggle
-		const listNotesItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const listNotesToggle = listNotesItem.createEl('input', { type: 'checkbox' });
-		listNotesToggle.checked = this.plugin.settings.scoutToolListNotes;
-		listNotesToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolListNotes = listNotesToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const listNotesLabel = listNotesItem.createDiv();
-		listNotesLabel.createEl('div', { text: 'List Notes', cls: 'ai-settings-tool-name' });
-		listNotesLabel.createEl('div', { text: 'Browse notes with previews', cls: 'ai-settings-tool-desc' });
-
-		// Keyword Search toggle
-		const keywordItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const keywordToggle = keywordItem.createEl('input', { type: 'checkbox' });
-		keywordToggle.checked = this.plugin.settings.scoutToolSearchKeyword;
-		keywordToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolSearchKeyword = keywordToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const keywordLabel = keywordItem.createDiv();
-		keywordLabel.createEl('div', { text: 'Keyword Search', cls: 'ai-settings-tool-name' });
-		keywordLabel.createEl('div', { text: 'Fast text search', cls: 'ai-settings-tool-desc' });
-
-		// Semantic Search toggle
-		const semanticItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const semanticToggle = semanticItem.createEl('input', { type: 'checkbox' });
-		semanticToggle.checked = this.plugin.settings.scoutToolSearchSemantic;
-		semanticToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolSearchSemantic = semanticToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const semanticLabel = semanticItem.createDiv();
-		semanticLabel.createEl('div', { text: 'Semantic Search', cls: 'ai-settings-tool-name' });
-		semanticLabel.createEl('div', { text: 'Concept-based search (needs embeddings)', cls: 'ai-settings-tool-desc' });
-
-		// Task Search toggle
-		const taskItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const taskToggle = taskItem.createEl('input', { type: 'checkbox' });
-		taskToggle.checked = this.plugin.settings.scoutToolSearchTaskRelevant;
-		taskToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolSearchTaskRelevant = taskToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const taskLabel = taskItem.createDiv();
-		taskLabel.createEl('div', { text: 'Task Search', cls: 'ai-settings-tool-name' });
-		taskLabel.createEl('div', { text: 'Task-aware semantic (needs embeddings)', cls: 'ai-settings-tool-desc' });
-
-		// Get Links toggle
-		const linksItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const linksToggle = linksItem.createEl('input', { type: 'checkbox' });
-		linksToggle.checked = this.plugin.settings.scoutToolGetLinks;
-		linksToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolGetLinks = linksToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const linksLabel = linksItem.createDiv();
-		linksLabel.createEl('div', { text: 'Get Links', cls: 'ai-settings-tool-name' });
-		linksLabel.createEl('div', { text: 'Single-hop exploration', cls: 'ai-settings-tool-desc' });
-
-		// Link Hop toggle
-		const linkHopItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const linkHopToggle = linkHopItem.createEl('input', { type: 'checkbox' });
-		linkHopToggle.checked = this.plugin.settings.scoutToolGetLinksRecursive;
-		linkHopToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolGetLinksRecursive = linkHopToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const linkHopLabel = linkHopItem.createDiv();
-		linkHopLabel.createEl('div', { text: 'Link Hop', cls: 'ai-settings-tool-name' });
-		linkHopLabel.createEl('div', { text: 'Multi-hop BFS traversal', cls: 'ai-settings-tool-desc' });
-
-		// View All Notes toggle
-		const viewAllItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const viewAllToggle = viewAllItem.createEl('input', { type: 'checkbox' });
-		viewAllToggle.checked = this.plugin.settings.scoutToolViewAllNotes;
-		viewAllToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolViewAllNotes = viewAllToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const viewAllLabel = viewAllItem.createDiv();
-		viewAllLabel.createEl('div', { text: 'View All Notes', cls: 'ai-settings-tool-name' });
-		viewAllLabel.createEl('div', { text: 'List notes with frontmatter', cls: 'ai-settings-tool-desc' });
-
-		// Explore Vault toggle
-		const exploreItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const exploreToggle = exploreItem.createEl('input', { type: 'checkbox' });
-		exploreToggle.checked = this.plugin.settings.scoutToolExploreVault;
-		exploreToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolExploreVault = exploreToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const exploreLabel = exploreItem.createDiv();
-		exploreLabel.createEl('div', { text: 'Explore Vault', cls: 'ai-settings-tool-name' });
-		exploreLabel.createEl('div', { text: 'Folders and tags', cls: 'ai-settings-tool-desc' });
-
-		// List All Tags toggle
-		const listTagsItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const listTagsToggle = listTagsItem.createEl('input', { type: 'checkbox' });
-		listTagsToggle.checked = this.plugin.settings.scoutToolListAllTags;
-		listTagsToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolListAllTags = listTagsToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const listTagsLabel = listTagsItem.createDiv();
-		listTagsLabel.createEl('div', { text: 'List All Tags', cls: 'ai-settings-tool-name' });
-		listTagsLabel.createEl('div', { text: 'Discover vault tags', cls: 'ai-settings-tool-desc' });
-
-		// Ask User toggle
-		const askUserItem = toolsGrid.createDiv({ cls: 'ai-settings-tool-item' });
-		const askUserToggle = askUserItem.createEl('input', { type: 'checkbox' });
-		askUserToggle.checked = this.plugin.settings.scoutToolAskUser;
-		askUserToggle.addEventListener('change', async () => {
-			this.plugin.settings.scoutToolAskUser = askUserToggle.checked;
-			await this.plugin.saveSettings();
-		});
-		const askUserLabel = askUserItem.createDiv();
-		askUserLabel.createEl('div', { text: 'Ask User', cls: 'ai-settings-tool-name' });
-		askUserLabel.createEl('div', { text: 'Clarify ambiguous tasks', cls: 'ai-settings-tool-desc' });
-
-		// Expected tokens display
-		const expectedTokensEl = scoutContent.createDiv({ cls: 'ai-settings-expected-tokens' });
-		const updateExpectedTokens = () => {
-			const iterations = this.plugin.settings.agenticMaxIterations;
-			const tokensPerIteration = this.plugin.settings.agenticMaxTokensPerIteration;
-			const answerLimit = this.plugin.settings.taskAgentTokenLimit;
-			const total = (iterations * tokensPerIteration) + answerLimit;
-			expectedTokensEl.setText(`Expected max tokens: ~${total.toLocaleString()} (${iterations} rounds × ${tokensPerIteration.toLocaleString()} + ${answerLimit.toLocaleString()} answer limit)`);
-		};
-		updateExpectedTokens();
-
-		// 6c: Web Agent
-		const webAgentEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
-		const webAgentSummary = webAgentEl.createEl('summary');
-		webAgentSummary.setText('Web Agent');
-
-		const webAgentContent = webAgentEl.createDiv({ cls: 'ai-settings-collapsible-content' });
-
-		new Setting(webAgentContent)
-			.setName('Search Results Limit')
-			.setDesc('Maximum number of search results to retrieve (3-15)')
-			.addSlider(slider => slider
-				.setLimits(3, 15, 1)
-				.setValue(this.plugin.settings.webAgentSnippetLimit)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.webAgentSnippetLimit = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(webAgentContent)
-			.setName('Pages to Fetch')
-			.setDesc('Maximum number of pages to fetch in full (1-5)')
-			.addSlider(slider => slider
-				.setLimits(1, 5, 1)
-				.setValue(this.plugin.settings.webAgentFetchLimit)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.webAgentFetchLimit = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(webAgentContent)
-			.setName('Web Content Token Budget')
-			.setDesc('Maximum tokens for web content (2000-20000)')
-			.addSlider(slider => slider
-				.setLimits(2000, 20000, 1000)
-				.setValue(this.plugin.settings.webAgentTokenBudget)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.webAgentTokenBudget = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(webAgentContent)
-			.setName('Auto Search')
-			.setDesc('Automatically search when vault context seems insufficient (disable to only search when explicitly requested)')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.webAgentAutoSearch)
-				.onChange(async (value) => {
-					this.plugin.settings.webAgentAutoSearch = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(webAgentContent)
-			.setName('Minimum Pages to Fetch')
-			.setDesc('Enforce minimum number of pages to fetch even if agent selects fewer (1-3)')
-			.addSlider(slider => slider
-				.setLimits(1, 3, 1)
-				.setValue(this.plugin.settings.webAgentMinFetchPages)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.webAgentMinFetchPages = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(webAgentContent)
-			.setName('Query Reformulation Retries')
-			.setDesc('If search yields few results, retry with different query (0-2 retries)')
-			.addSlider(slider => slider
-				.setLimits(0, 2, 1)
-				.setValue(this.plugin.settings.webAgentMaxQueryRetries)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.webAgentMaxQueryRetries = value;
-					await this.plugin.saveSettings();
-				}));
-
-		const webCostEl = webAgentContent.createDiv({ cls: 'ai-settings-expected-tokens' });
-		webCostEl.setText('Typical cost per web search: ~$0.04-0.08 (search API + LLM reasoning + page fetching)');
-
-		// 6d: Task Agent (Edit Rules)
-		const editRulesEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
-		const editRulesSummary = editRulesEl.createEl('summary');
-		editRulesSummary.setText('Task Agent');
-
-		const editRulesContent = editRulesEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+		const editRulesContent = this.editRulesEl.createDiv({ cls: 'ai-settings-collapsible-content' });
 
 		new Setting(editRulesContent)
 			.setName('Editable Scope')
@@ -4518,27 +3982,59 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					this.plugin.notifySettingsChanged('editRules');
 				}));
 
-		new Setting(editRulesContent)
-			.setName('Allow creating new notes')
-			.setDesc('AI can create new note files')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.defaultCanCreate)
+		// 6d: Web Search (conditional — hidden when web tools are disabled)
+		this.webSearchEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const webAgentSummary = this.webSearchEl.createEl('summary');
+		webAgentSummary.setText('Web Search');
+
+		const webAgentContent = this.webSearchEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+
+		new Setting(webAgentContent)
+			.setName('Search Results Limit')
+			.setDesc('Maximum number of search results to retrieve (3-15)')
+			.addSlider(slider => slider
+				.setLimits(3, 15, 1)
+				.setValue(this.plugin.settings.webAgentSnippetLimit)
+				.setDynamicTooltip()
 				.onChange(async (value) => {
-					this.plugin.settings.defaultCanCreate = value;
+					this.plugin.settings.webAgentSnippetLimit = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('editRules');
 				}));
 
-		new Setting(editRulesContent)
-			.setName('Allow opening notes')
-			.setDesc('AI can open notes in new tabs')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.defaultCanNavigate)
+		new Setting(webAgentContent)
+			.setName('Pages to Fetch')
+			.setDesc('Maximum number of pages to fetch in full (1-5)')
+			.addSlider(slider => slider
+				.setLimits(1, 5, 1)
+				.setValue(this.plugin.settings.webAgentFetchLimit)
+				.setDynamicTooltip()
 				.onChange(async (value) => {
-					this.plugin.settings.defaultCanNavigate = value;
+					this.plugin.settings.webAgentFetchLimit = value;
 					await this.plugin.saveSettings();
-					this.plugin.notifySettingsChanged('editRules');
 				}));
+
+		new Setting(webAgentContent)
+			.setName('Web Content Token Budget')
+			.setDesc('Maximum tokens for web content (2000-20000)')
+			.addSlider(slider => slider
+				.setLimits(2000, 20000, 1000)
+				.setValue(this.plugin.settings.webAgentTokenBudget)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.webAgentTokenBudget = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// 6e: Command Whitelist (conditional — hidden when execute_command is disabled)
+		this.cmdWhitelistEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const cmdWhitelistSummary = this.cmdWhitelistEl.createEl('summary');
+		cmdWhitelistSummary.setText('Command Whitelist');
+
+		const cmdWhitelistContent = this.cmdWhitelistEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+		this.renderCommandWhitelist(cmdWhitelistContent);
+
+		// Apply conditional section visibility
+		this.updateConditionalSections();
 
 		// ============================================
 		// SECTION 7: Developer
@@ -4573,7 +4069,8 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		try {
 			const existingIndex = await loadEmbeddingIndex(
 				this.app.vault,
-				'.obsidian/plugins/obsidian-agent'
+				'.obsidian/plugins/obsidian-agent',
+				this.plugin.logger
 			);
 
 			const result = await reindexVault(
@@ -4584,7 +4081,8 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				this.plugin.settings.embeddingModel,
 				(current, total, status) => {
 					progressNotice.setMessage(`Indexing... ${current}/${total} notes`);
-				}
+				},
+				this.plugin.logger
 			);
 
 			await saveEmbeddingIndex(
@@ -4701,5 +4199,289 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				}
 			});
 		}
+	}
+
+	/**
+	 * Update conditional section visibility based on tool toggle state.
+	 */
+	private updateConditionalSections() {
+		const disabled = new Set(this.plugin.settings.disabledTools || []);
+		if (this.editRulesEl) {
+			this.editRulesEl.style.display = disabled.has('edit_note') ? 'none' : '';
+		}
+		if (this.webSearchEl) {
+			const webHidden = disabled.has('web_search') && disabled.has('read_webpage');
+			this.webSearchEl.style.display = webHidden ? 'none' : '';
+		}
+		if (this.cmdWhitelistEl) {
+			this.cmdWhitelistEl.style.display = disabled.has('execute_command') ? 'none' : '';
+		}
+	}
+
+	/**
+	 * Render (or re-render) pill-style toggle buttons for all agent tools.
+	 * 4 groups: Vault, Web, Action, Advanced.
+	 * Protected tools (done, ask_user) are always locked ON.
+	 * Web tools forced OFF when web search is not configured.
+	 * edit_note forced OFF when both canAdd and canDelete are off.
+	 */
+	private renderToolTogglePills(wrapper: HTMLElement) {
+		wrapper.empty();
+
+		const s = this.plugin.settings;
+		const disabled = new Set(s.disabledTools || []);
+
+		const webConfigured = s.webAgentSearchApi === 'openai'
+			? !!s.openaiApiKey
+			: !!s.webAgentSearchApiKey;
+
+		const toolLabel: Record<string, string> = {
+			search_vault: 'Search Vault',
+			read_note: 'Read Note',
+			list_notes: 'List Notes',
+			get_links: 'Get Links',
+			explore_structure: 'Explore Structure',
+			list_tags: 'List Tags',
+			get_manual_context: 'Manual Context',
+			web_search: 'Web Search',
+			read_webpage: 'Read Webpage',
+			edit_note: 'Edit Note',
+			create_note: 'Create Note',
+			open_note: 'Open Note',
+			move_note: 'Move Note',
+			update_properties: 'Update Properties',
+			add_tags: 'Add Tags',
+			link_notes: 'Link Notes',
+			copy_notes: 'Copy Notes',
+			done: 'Done',
+			ask_user: 'Ask User',
+			get_properties: 'Get Properties',
+			get_file_info: 'File Info',
+			find_dead_links: 'Dead Links',
+			query_notes: 'Query Notes',
+			delete_note: 'Delete Note',
+			execute_command: 'Execute Command',
+		};
+
+		const vaultTools = [
+			'search_vault', 'read_note', 'list_notes', 'get_links',
+			'explore_structure', 'list_tags', 'get_manual_context'
+		];
+		const webToolNames = ['web_search', 'read_webpage'];
+		const actionTools = [
+			'edit_note', 'create_note', 'open_note', 'move_note',
+			'update_properties', 'add_tags', 'link_notes', 'copy_notes',
+			'done', 'ask_user'
+		];
+		const advancedTools = [
+			'get_properties', 'get_file_info', 'find_dead_links', 'query_notes',
+			'delete_note', 'execute_command'
+		];
+
+		// Only edit_note is gated by capability settings
+		const capBlockedTools = new Set<string>();
+		if (!s.defaultCanAdd && !s.defaultCanDelete) capBlockedTools.add('edit_note');
+
+		const protectedTools = new Set(['done', 'ask_user']);
+
+		const settingEl = new Setting(wrapper)
+			.setName('Tool Toggles')
+			.setDesc('Enable or disable individual agent tools. Protected tools (Done, Ask User) cannot be toggled off.');
+		settingEl.settingEl.style.borderBottom = 'none';
+
+		const renderGroup = (label: string, tools: string[]) => {
+			const group = wrapper.createDiv({ cls: 'ai-tool-toggle-group' });
+			group.createDiv({ cls: 'ai-tool-toggle-group-label', text: label });
+			const pills = group.createDiv({ cls: 'ai-tool-toggle-pills' });
+
+			for (const tool of tools) {
+				const isProtected = protectedTools.has(tool);
+				const isWebBlocked = webToolNames.includes(tool) && !webConfigured;
+				const isCapBlocked = capBlockedTools.has(tool);
+				const isForcedOff = isWebBlocked || isCapBlocked;
+				const isOn = isProtected || (!isForcedOff && !disabled.has(tool));
+
+				const pill = pills.createEl('span', {
+					text: toolLabel[tool] || tool,
+					cls: 'ai-tool-toggle-pill'
+				});
+
+				if (isProtected) {
+					pill.addClass('is-locked');
+					pill.title = 'Required for agent control flow';
+				} else if (isForcedOff) {
+					pill.addClass('is-forced-off');
+					pill.title = isWebBlocked
+						? 'Web search not configured'
+						: 'Blocked by Edit Rules';
+				} else if (isOn) {
+					pill.addClass('is-on');
+				} else {
+					pill.addClass('is-off');
+				}
+
+				if (!isProtected && !isForcedOff) {
+					pill.addEventListener('click', async () => {
+						const currentlyDisabled = new Set(this.plugin.settings.disabledTools || []);
+						if (currentlyDisabled.has(tool)) {
+							currentlyDisabled.delete(tool);
+						} else {
+							currentlyDisabled.add(tool);
+						}
+						this.plugin.settings.disabledTools = [...currentlyDisabled];
+						await this.plugin.saveSettings();
+						this.renderToolTogglePills(wrapper);
+						this.updateConditionalSections();
+						this.plugin.notifySettingsChanged('editRules');
+					});
+				}
+			}
+		};
+
+		renderGroup('Vault Tools', vaultTools);
+		renderGroup('Web Tools', webToolNames);
+		renderGroup('Action Tools', actionTools);
+		renderGroup('Advanced Tools', advancedTools);
+	}
+
+	/**
+	 * Render command whitelist UI with card-styled items.
+	 */
+	private renderCommandWhitelist(container: HTMLElement) {
+		container.empty();
+
+		const whitelist = this.plugin.settings.whitelistedCommands || [];
+
+		if (whitelist.length === 0) {
+			container.createDiv({
+				text: 'No commands whitelisted yet.',
+				cls: 'ai-command-whitelist-empty'
+			});
+		} else {
+			const listEl = container.createDiv({ cls: 'ai-command-whitelist-list' });
+			for (const cmd of whitelist) {
+				const item = listEl.createDiv({ cls: 'ai-command-whitelist-item' });
+				const info = item.createDiv({ cls: 'ai-command-whitelist-info' });
+				info.createDiv({ text: cmd.name, cls: 'ai-command-whitelist-name' });
+				info.createDiv({ text: cmd.description, cls: 'ai-command-whitelist-desc' });
+
+				const removeBtn = item.createEl('button', {
+					text: '\u00d7',
+					cls: 'ai-command-whitelist-remove',
+					attr: { 'aria-label': `Remove ${cmd.name}` }
+				});
+				removeBtn.addEventListener('click', async () => {
+					this.plugin.settings.whitelistedCommands = this.plugin.settings.whitelistedCommands.filter(
+						c => c.id !== cmd.id
+					);
+					await this.plugin.saveSettings();
+					this.renderCommandWhitelist(container);
+				});
+			}
+		}
+
+		// Add command button
+		new Setting(container)
+			.addButton(button => button
+				.setButtonText('+ Add Command')
+				.setCta()
+				.onClick(() => {
+					this.showCommandPicker(container);
+				}));
+	}
+
+	/**
+	 * Show a searchable command picker modal.
+	 */
+	private showCommandPicker(whitelistContainer: HTMLElement) {
+		const commands = (this.app as any).commands.listCommands() as Array<{ id: string; name: string }>;
+
+		// Filter out already-whitelisted commands
+		const existingIds = new Set(this.plugin.settings.whitelistedCommands.map(c => c.id));
+		const available = commands.filter(c => !existingIds.has(c.id));
+
+		// Create a fuzzy suggest modal
+		const { FuzzySuggestModal } = require('obsidian');
+		const modal = new (class extends FuzzySuggestModal<{ id: string; name: string }> {
+			settingsTab: AIAssistantSettingTab;
+			whitelistContainer: HTMLElement;
+
+			constructor(app: App, settingsTab: AIAssistantSettingTab, container: HTMLElement) {
+				super(app);
+				this.settingsTab = settingsTab;
+				this.whitelistContainer = container;
+			}
+
+			getItems() {
+				return available;
+			}
+
+			getItemText(item: { id: string; name: string }) {
+				return item.name;
+			}
+
+			onChooseItem(item: { id: string; name: string }) {
+				// Prompt for description
+				this.settingsTab.showDescriptionInput(item, this.whitelistContainer);
+			}
+		})(this.app, this, whitelistContainer);
+
+		modal.setPlaceholder('Search commands...');
+		modal.open();
+	}
+
+	/**
+	 * Show a simple input for the command description after picking a command.
+	 */
+	private showDescriptionInput(command: { id: string; name: string }, whitelistContainer: HTMLElement) {
+		const { Modal } = require('obsidian');
+		const modal = new (class extends Modal {
+			settingsTab: AIAssistantSettingTab;
+			command: { id: string; name: string };
+			whitelistContainer: HTMLElement;
+
+			constructor(app: App, settingsTab: AIAssistantSettingTab, cmd: { id: string; name: string }, container: HTMLElement) {
+				super(app);
+				this.settingsTab = settingsTab;
+				this.command = cmd;
+				this.whitelistContainer = container;
+			}
+
+			onOpen() {
+				const { contentEl } = this;
+				contentEl.createEl('h3', { text: `Add: ${this.command.name}` });
+				contentEl.createEl('p', { text: 'Provide a short description so the agent knows when to use this command.' });
+
+				const input = contentEl.createEl('input', { type: 'text', placeholder: 'e.g., Toggle all folds in the current note' });
+				input.style.width = '100%';
+				input.style.marginBottom = '12px';
+
+				const btnContainer = contentEl.createDiv({ cls: 'modal-button-container' });
+				const saveBtn = btnContainer.createEl('button', { text: 'Add', cls: 'mod-cta' });
+				saveBtn.addEventListener('click', async () => {
+					const desc = input.value.trim() || this.command.name;
+					this.settingsTab.plugin.settings.whitelistedCommands.push({
+						id: this.command.id,
+						name: this.command.name,
+						description: desc
+					});
+					await this.settingsTab.plugin.saveSettings();
+					this.settingsTab.renderCommandWhitelist(this.whitelistContainer);
+					this.close();
+				});
+
+				const cancelBtn = btnContainer.createEl('button', { text: 'Cancel' });
+				cancelBtn.addEventListener('click', () => this.close());
+
+				// Focus the input
+				setTimeout(() => input.focus(), 50);
+			}
+
+			onClose() {
+				this.contentEl.empty();
+			}
+		})(this.app, this, command, whitelistContainer);
+
+		modal.open();
 	}
 }

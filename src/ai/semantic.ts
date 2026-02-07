@@ -5,6 +5,7 @@
 import { requestUrl, Vault, TFolder } from 'obsidian';
 import { EmbeddingChunk, EmbeddingIndex, EmbeddingModel } from '../types';
 import { isFileExcluded } from '../utils/fileUtils';
+import { Logger } from '../utils/logger';
 
 // Chunk interface for internal processing
 interface Chunk {
@@ -156,7 +157,8 @@ export async function reindexVault(
 	existingIndex: EmbeddingIndex | null,
 	apiKey: string,
 	model: EmbeddingModel,
-	onProgress?: (current: number, total: number, status: string) => void
+	onProgress?: (current: number, total: number, status: string) => void,
+	logger?: Logger
 ): Promise<{ index: EmbeddingIndex; stats: { total: number; updated: number; reused: number } }> {
 	const allFiles = vault.getMarkdownFiles();
 	const eligibleFiles = allFiles.filter(f => !isFileExcluded(f.path, excludedFolders));
@@ -210,7 +212,11 @@ export async function reindexVault(
 				});
 				updated++;
 			} catch (error) {
-				console.error(`Failed to generate embedding for ${file.path}:`, error);
+				if (logger) {
+					logger.error('SEMANTIC', `Failed to generate embedding for ${file.path}`, error);
+				} else {
+					console.error(`Failed to generate embedding for ${file.path}:`, error);
+				}
 			}
 		}
 	}
@@ -293,7 +299,8 @@ export function searchSemantic(
  */
 export async function loadEmbeddingIndex(
 	vault: Vault,
-	pluginDataPath: string
+	pluginDataPath: string,
+	logger?: Logger
 ): Promise<EmbeddingIndex | null> {
 	try {
 		const indexPath = `${pluginDataPath}/embeddings.json`;
@@ -305,7 +312,11 @@ export async function loadEmbeddingIndex(
 		const content = await vault.adapter.read(indexPath);
 		return JSON.parse(content) as EmbeddingIndex;
 	} catch (error) {
-		console.error('Failed to load embedding index:', error);
+		if (logger) {
+			logger.error('SEMANTIC', 'Failed to load embedding index', error);
+		} else {
+			console.error('Failed to load embedding index:', error);
+		}
 		return null;
 	}
 }

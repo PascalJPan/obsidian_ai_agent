@@ -29,6 +29,26 @@ export function determineEditType(edit: ValidatedEdit): 'replace' | 'add' | 'del
 }
 
 /**
+ * Parse a line range spec like "5" or "5-7" into start/end line numbers.
+ * Returns null with error message if the spec is invalid or out of range.
+ */
+function parseLineRange(spec: string, lineCount: number): { start: number; end: number } | { error: string } {
+	const rangeMatch = spec.match(/^(\d+)(?:-(\d+))?$/);
+	if (!rangeMatch) {
+		return { error: `Invalid line range: "${spec}". Use "5" or "5-7"` };
+	}
+	const start = parseInt(rangeMatch[1], 10);
+	const end = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : start;
+	if (start < 1 || start > lineCount) {
+		return { error: `Line ${start} out of range (file has ${lineCount} lines)` };
+	}
+	if (end < start || end > lineCount) {
+		return { error: `Line range ${start}-${end} invalid (file has ${lineCount} lines)` };
+	}
+	return { start, end };
+}
+
+/**
  * Compute new content based on edit instruction
  * Returns the resulting content and any error
  */
@@ -113,27 +133,15 @@ export function computeNewContent(currentContent: string, instruction: EditInstr
 
 	if (position.startsWith('delete:')) {
 		const lineSpec = position.substring(7);
-		const rangeMatch = lineSpec.match(/^(\d+)(?:-(\d+))?$/);
-
-		if (!rangeMatch) {
-			return { content: '', error: `Invalid delete format: "${lineSpec}". Use "delete:5" or "delete:5-7"` };
-		}
-
-		const startLine = parseInt(rangeMatch[1], 10);
-		const endLine = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : startLine;
-
 		const lines = currentContent.split('\n');
-
-		if (startLine < 1 || startLine > lines.length) {
-			return { content: '', error: `Line ${startLine} out of range (file has ${lines.length} lines)` };
-		}
-		if (endLine < startLine || endLine > lines.length) {
-			return { content: '', error: `Line range ${startLine}-${endLine} invalid (file has ${lines.length} lines)` };
+		const range = parseLineRange(lineSpec, lines.length);
+		if ('error' in range) {
+			return { content: '', error: range.error };
 		}
 
 		const newLines = [
-			...lines.slice(0, startLine - 1),
-			...lines.slice(endLine)
+			...lines.slice(0, range.start - 1),
+			...lines.slice(range.end)
 		];
 
 		return { content: newLines.join('\n'), error: null };
@@ -141,30 +149,19 @@ export function computeNewContent(currentContent: string, instruction: EditInstr
 
 	if (position.startsWith('replace:')) {
 		const lineSpec = position.substring(8);
-		const rangeMatch = lineSpec.match(/^(\d+)(?:-(\d+))?$/);
+		const lines = currentContent.split('\n');
+		const range = parseLineRange(lineSpec, lines.length);
 
-		if (rangeMatch) {
-			const startLine = parseInt(rangeMatch[1], 10);
-			const endLine = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : startLine;
-
-			const lines = currentContent.split('\n');
-
-			if (startLine < 1 || startLine > lines.length) {
-				return { content: '', error: `Line ${startLine} out of range (file has ${lines.length} lines)` };
-			}
-			if (endLine < startLine || endLine > lines.length) {
-				return { content: '', error: `Line range ${startLine}-${endLine} invalid (file has ${lines.length} lines)` };
-			}
-
+		if (!('error' in range)) {
 			const newLines = [
-				...lines.slice(0, startLine - 1),
+				...lines.slice(0, range.start - 1),
 				newText,
-				...lines.slice(endLine)
+				...lines.slice(range.end)
 			];
-
 			return { content: newLines.join('\n'), error: null };
 		}
 
+		// Fallback: treat lineSpec as literal text to replace
 		const normalizedContent = currentContent.replace(/\r\n/g, '\n');
 		const normalizedSearch = lineSpec.replace(/\r\n/g, '\n');
 
