@@ -2271,3 +2271,167 @@ button:disabled {
 	font-size: 0.85em;
 	padding: 8px 0;
 }
+
+/* ============================================
+   Custom Info Tools Cards
+   ============================================ */
+
+.ai-custom-info-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.ai-custom-info-item {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	padding: 10px 14px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	gap: 10px;
+	transition: border-color 0.15s ease;
+}
+
+.ai-custom-info-item:hover {
+	border-color: var(--interactive-accent);
+}
+
+.ai-custom-info-toggle {
+	flex-shrink: 0;
+	margin: 0;
+}
+
+.ai-custom-info-info {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-width: 0;
+}
+
+.ai-custom-info-name {
+	font-weight: 600;
+	font-size: 0.9em;
+	color: var(--text-normal);
+}
+
+.ai-custom-info-source {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-top: 2px;
+}
+
+.ai-custom-info-trigger {
+	font-size: 0.8em;
+	color: var(--text-faint);
+	margin-top: 2px;
+	font-style: italic;
+}
+
+.ai-custom-info-edit {
+	background: none;
+	border: 1px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: 0.8em;
+	padding: 4px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	flex-shrink: 0;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.ai-custom-info-edit:hover {
+	color: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+}
+
+.ai-custom-info-remove {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 4px;
+	flex-shrink: 0;
+	transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ai-custom-info-remove:hover {
+	color: var(--text-error);
+	background: var(--background-modifier-hover);
+}
+
+.ai-custom-info-empty {
+	font-style: italic;
+	color: var(--text-muted);
+	font-size: 0.85em;
+	padding: 8px 0;
+}
+
+/* Custom Info Tool Modal */
+
+.ai-custom-info-modal-label {
+	display: block;
+	font-weight: 500;
+	font-size: 0.9em;
+	margin-top: 12px;
+	margin-bottom: 4px;
+}
+
+.ai-custom-info-modal-input {
+	width: 100%;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 0.95em;
+}
+
+.ai-custom-info-modal-input:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.ai-custom-info-modal-radio-row {
+	display: flex;
+	gap: 16px;
+	margin: 4px 0;
+}
+
+.ai-custom-info-modal-section {
+	margin-top: 8px;
+}
+
+.ai-custom-info-modal-textarea {
+	width: 100%;
+	min-height: 120px;
+	resize: vertical;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+	line-height: 1.4;
+}
+
+.ai-custom-info-modal-textarea:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.ai-custom-info-modal-note-row {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.ai-custom-info-modal-note-row .ai-custom-info-modal-input {
+	flex: 1;
+}

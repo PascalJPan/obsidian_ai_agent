@@ -9,17 +9,19 @@ This is an Obsidian plugin that provides an AI assistant for note editing and an
 
 ### Unified Agent
 
-A single agent with a ReAct (Think → Act → Observe) loop explores the vault, searches the web, and takes actions in one unified loop. Replaces the previous 3-phase pipeline (Scout → Web → Task). The agent has **25 tools** across 3 categories:
+A single agent with a ReAct (Think → Act → Observe) loop explores the vault, searches the web, and takes actions in one unified loop. Replaces the previous 3-phase pipeline (Scout → Web → Task). The agent has **25 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
 
 - **Vault tools** (11): `search_vault`, `read_note`, `list_notes`, `get_links`, `explore_structure`, `list_tags`, `get_manual_context`, `get_properties`, `get_file_info`, `find_dead_links`, `query_notes`
 - **Web tools** (2): `web_search`, `read_webpage` (only if search API is configured)
 - **Action tools** (12): `edit_note`, `create_note`, `open_note`, `move_note`, `update_properties`, `add_tags`, `link_notes`, `copy_notes`, `delete_note`, `execute_command`, `done`, `ask_user`
+- **Custom Info tools** (0+): User-defined zero-parameter tools that return reference content on demand (e.g., plugin syntax docs). Ships with a **Dataview Reference** tool (`info_dataview_reference`) enabled by default — covers DQL syntax, all 60+ functions, implicit fields, DataviewJS API, and common patterns.
 
 **Tool control:**
-- `disabledTools: string[]` — single source of truth for which tools are off
+- `disabledTools: string[]` — single source of truth for which built-in tools are off
 - `done` and `ask_user` are always protected (cannot be disabled)
 - Default disabled: `['delete_note', 'execute_command']`
-- Settings UI uses pill toggles in 4 groups (Vault, Web, Action, Advanced)
+- Custom info tools have per-tool `enabled` toggle (independent of `disabledTools`)
+- Settings UI uses pill toggles in 5 groups (Vault, Web, Action, Advanced, Info Tools)
 
 **Runaway protection:**
 - Hard iteration cap (`agentMaxIterations`, 5-20, default 10)
@@ -32,6 +34,7 @@ A single agent with a ReAct (Think → Act → Observe) loop explores the vault,
 - **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as manual context
   - `linkDepth` (0-3): How many hops of links to follow
   - Excluded folders act as **walls**: files in them are excluded AND their links are not followed
+  - `excludedTag` (default `"private"`): notes with this tag are treated as excluded (same enforcement as folders)
 
 - **Editable Scope** (`EditableScope`): Which notes AI is allowed to edit
   - `current`: Only current note
@@ -51,8 +54,11 @@ A single agent with a ReAct (Think → Act → Observe) loop explores the vault,
 - `chatHistoryLength`: Previous messages to include (0-100, default 10)
 - `disabledTools`: Tools turned off by user
 - `whitelistedCommands`: Commands the agent can execute
+- `customInfoTools`: User-defined knowledge tools (see CustomInfoTool below)
+- `excludedTag`: Tag that marks notes as private (default: `"private"`)
 - Web search API settings (openai, serper, brave, tavily)
 - Edit rules (scope, capabilities)
+- Feature toggles: `enableWebSearch`, `enableEmbeddings`, `enableManualContext` (all default `false`)
 
 ## Core Data Structures
 
@@ -69,6 +75,20 @@ Wraps EditInstruction with resolved file, current/new content, and error state.
 { id: string, type: 'replace'|'add'|'delete', before: string, after: string }
 ```
 
+### CustomInfoTool
+```typescript
+interface CustomInfoTool {
+  id: string;                  // UUID
+  name: string;                // User-facing name, e.g. "Dataview Syntax"
+  toolName: string;            // Auto-generated, e.g. "info_dataview_syntax"
+  triggerDescription: string;  // AI sees this as the tool description
+  contentType: 'inline' | 'note';
+  inlineContent?: string;      // Content if inline
+  notePath?: string;           // Vault note path if note-based
+  enabled: boolean;            // Per-tool toggle
+}
+```
+
 ### AgentConfig
 ```typescript
 interface AgentConfig {
@@ -79,6 +99,7 @@ interface AgentConfig {
   webEnabled: boolean;
   disabledTools: string[];
   whitelistedCommands: WhitelistedCommand[];
+  customInfoTools: CustomInfoTool[];
   customPrompts?: { character?: string };
   chatHistoryLength: number; debugMode: boolean;
 }
@@ -89,6 +110,7 @@ Bridges pure agent logic to Obsidian APIs:
 - **Vault reading**: `readNote`, `searchKeyword`, `searchSemantic`, `listNotes`, `getLinks`, `exploreStructure`, `listTags`, `getAllNotes`, `getManualContext`, `getProperties`, `getFileInfo`, `findDeadLinks`, `queryNotes`
 - **Web**: `webSearch?`, `fetchPage?`
 - **Actions**: `proposeEdit`, `createNote`, `openNote`, `moveNote`, `updateProperties`, `addTags`, `linkNotes`, `copyNotes`, `deleteNote`, `executeCommand`
+- **Custom Info**: `resolveCustomInfoTool?` — resolves inline content or reads vault note for custom info tools
 - **Meta**: `askUser` (Promise-based pause — blocks the loop until user responds), `onProgress`
 
 ### AgentResult
@@ -140,6 +162,7 @@ interface AgentResult {
 - `handleVaultToolCall()` — dispatches vault tool calls via callbacks
 - `handleWebToolCall()` — dispatches web tool calls via callbacks
 - `handleActionToolCall()` — dispatches action tool calls; `ask_user` calls `callbacks.askUser()` directly, `done` signals completion
+- `buildCustomInfoTools()` — builds zero-parameter OpenAI tool definitions from enabled custom info tools
 
 ### src/ai/prompts/
 - `buildAgentSystemPrompt()` — builds system prompt with vault language, tools, scope rules

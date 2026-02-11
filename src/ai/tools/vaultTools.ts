@@ -123,7 +123,7 @@ export const TOOL_EXPLORE_STRUCTURE: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'explore_structure',
-		description: 'Two actions: "list_folder" to see files/subfolders in a folder, "find_by_tag" to find notes with a specific tag.',
+		description: 'Two actions: "list_folder" to browse folder contents (set recursive=true for full tree, note_names=false to see only folders with note counts — ideal for getting a compact vault overview), "find_by_tag" to find notes with a specific tag.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -142,7 +142,11 @@ export const TOOL_EXPLORE_STRUCTURE: OpenAITool = {
 				},
 				recursive: {
 					type: 'boolean',
-					description: 'For list_folder: include subfolders (default: false)'
+					description: 'For list_folder: if true, returns a full indented tree of all nested files and subfolders instead of just immediate children (default: false)'
+				},
+				note_names: {
+					type: 'boolean',
+					description: 'For list_folder: if false, hides individual note names and only shows folders with a count of notes inside — useful for a compact structural overview (default: true)'
 				}
 			},
 			required: ['action']
@@ -166,8 +170,16 @@ export const TOOL_GET_MANUAL_CONTEXT: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'get_manual_context',
-		description: 'Get the user\'s manually configured context notes. Returns all notes selected via the Manual Context panel (linked notes, folder notes, semantic matches, manually added notes) with line-numbered content. Call this when the user refers to "my context", "manual context", or "based on my context".',
-		parameters: { type: 'object', properties: {} }
+		description: 'Get the user\'s manually configured context notes. Returns notes selected via the Manual Context panel (linked notes, folder notes, semantic matches, manually added notes). Call this when the user refers to "my context", "manual context", or "based on my context". Use summary_only=true to get just note paths and previews without full content — useful to see what\'s available before deciding which notes to read in full.',
+		parameters: {
+			type: 'object',
+			properties: {
+				summary_only: {
+					type: 'boolean',
+					description: 'If true, returns only note paths and a 2-line preview instead of full content. Useful to see what context notes are available without consuming many tokens (default: false)'
+				}
+			}
+		}
 	}
 };
 
@@ -384,8 +396,10 @@ export async function handleVaultToolCall(
 			return tags.map(t => `${t.tag} (${t.count} notes)`).join('\n');
 		}
 
-		case 'get_manual_context':
-			return await callbacks.getManualContext();
+		case 'get_manual_context': {
+			const summaryOnly = !!args.summary_only;
+			return await callbacks.getManualContext(summaryOnly);
+		}
 
 		case 'get_properties': {
 			const path = args.path as string;

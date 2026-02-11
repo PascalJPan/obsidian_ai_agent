@@ -158,10 +158,14 @@ export async function reindexVault(
 	apiKey: string,
 	model: EmbeddingModel,
 	onProgress?: (current: number, total: number, status: string) => void,
-	logger?: Logger
+	logger?: Logger,
+	additionalExcludedPaths?: Set<string>
 ): Promise<{ index: EmbeddingIndex; stats: { total: number; updated: number; reused: number } }> {
 	const allFiles = vault.getMarkdownFiles();
-	const eligibleFiles = allFiles.filter(f => !isFileExcluded(f.path, excludedFolders));
+	const eligibleFiles = allFiles.filter(f =>
+		!isFileExcluded(f.path, excludedFolders) &&
+		!(additionalExcludedPaths && additionalExcludedPaths.has(f.path))
+	);
 
 	// Build hash map from existing index for quick lookup
 	const existingChunks = new Map<string, EmbeddingChunk>();

@@ -45,7 +45,9 @@ import {
 	SemanticSearchResult,
 	NotePreview,
 	LinkInfo,
-	WhitelistedCommand
+	WhitelistedCommand,
+	CustomInfoTool,
+	generateInfoToolName
 } from './src/types';
 import { runAgent } from './src/ai/agent';
 import {
@@ -75,6 +77,7 @@ import {
 	NotePickerModal
 } from './src/modals';
 import { EditManager } from './src/edits/editManager';
+import { DEFAULT_DATAVIEW_TOOL } from './src/defaults/dataviewReference';
 
 // View type constant
 const AI_ASSISTANT_VIEW_TYPE = 'ai-assistant-view';
@@ -86,6 +89,7 @@ interface MyPluginSettings {
 	customInstructions: string;     // Custom instructions (personality, tone, edit preferences)
 	pendingEditTag: string;
 	excludedFolders: string[];
+	excludedTag: string;            // Tag that marks notes as private (e.g. "private")
 	chatHistoryLength: number;      // Number of previous messages to include (0-100)
 	debugMode: boolean;             // Log prompts and responses to console
 	clearChatOnNoteSwitch: boolean; // Clear chat history when switching notes
@@ -113,6 +117,13 @@ interface MyPluginSettings {
 	defaultCanDelete: boolean;
 	disabledTools: string[];               // Agent tool names disabled by user (includes advanced tools)
 	whitelistedCommands: WhitelistedCommand[]; // Commands the agent is allowed to execute
+	customInfoTools: CustomInfoTool[];     // User-defined knowledge tools
+	// Feature toggles
+	enableWebSearch: boolean;              // Master toggle for web search features
+	enableEmbeddings: boolean;             // Master toggle for embedding/semantic search
+	enableManualContext: boolean;           // Master toggle for manual context panel
+	// Internal migration tracking
+	_defaultInfoToolsVersion?: number;     // Tracks which default info tools have been injected
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -121,6 +132,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	customInstructions: '',
 	pendingEditTag: '#ai_edit',
 	excludedFolders: [],
+	excludedTag: 'private',
 	chatHistoryLength: 10,
 	debugMode: false,
 	clearChatOnNoteSwitch: false,
@@ -146,7 +158,12 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	defaultCanAdd: true,
 	defaultCanDelete: true,
 	disabledTools: ['delete_note', 'execute_command'],
-	whitelistedCommands: []
+	whitelistedCommands: [],
+	customInfoTools: [DEFAULT_DATAVIEW_TOOL],
+	// Feature toggles - all off by default
+	enableWebSearch: false,
+	enableEmbeddings: false,
+	enableManualContext: false
 }
 
 // Type definitions now imported from src/types.ts
@@ -362,6 +379,18 @@ export default class MyPlugin extends Plugin {
 				loaded.disabledTools = [...disabled];
 				delete loaded.defaultCanCreate;
 				delete loaded.defaultCanNavigate;
+			}
+
+			// Inject default info tools for existing users (version-gated)
+			const CURRENT_DEFAULT_INFO_VERSION = 1;
+			const v = loaded._defaultInfoToolsVersion || 0;
+			if (v < CURRENT_DEFAULT_INFO_VERSION) {
+				if (!loaded.customInfoTools) loaded.customInfoTools = [];
+				const existingIds = new Set(loaded.customInfoTools.map((t: any) => t.id));
+				if (!existingIds.has(DEFAULT_DATAVIEW_TOOL.id)) {
+					loaded.customInfoTools.push(DEFAULT_DATAVIEW_TOOL);
+				}
+				loaded._defaultInfoToolsVersion = CURRENT_DEFAULT_INFO_VERSION;
 			}
 		}
 
@@ -1189,12 +1218,26 @@ export default class MyPlugin extends Plugin {
 		return Math.ceil(text.length / 4);
 	}
 
+	isNotePrivate(filePath: string): boolean {
+		const tag = this.settings.excludedTag;
+		if (!tag) return false;
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) return false;
+		const cache = this.app.metadataCache.getFileCache(file);
+		if (!cache) return false;
+		const normalizedTag = tag.replace(/^#/, '');
+		const fmTags = cache.frontmatter?.tags;
+		if (Array.isArray(fmTags) && fmTags.some((t: string) => t.replace(/^#/, '') === normalizedTag)) return true;
+		if (cache.tags?.some(t => t.tag.replace(/^#/, '') === normalizedTag)) return true;
+		return false;
+	}
+
 	isFileExcluded(file: TFile): boolean {
-		return isFileExcluded(file.path, this.settings.excludedFolders);
+		return isFileExcluded(file.path, this.settings.excludedFolders) || this.isNotePrivate(file.path);
 	}
 
 	isPathExcluded(filePath: string): boolean {
-		return isFileExcluded(filePath, this.settings.excludedFolders);
+		return isFileExcluded(filePath, this.settings.excludedFolders) || this.isNotePrivate(filePath);
 	}
 
 	async validateEdits(edits: EditInstruction[]): Promise<ValidatedEdit[]> {
@@ -1494,6 +1537,7 @@ class AIAssistantView extends ItemView {
 	private semanticCountLabel: HTMLSpanElement | null = null;
 	private semanticSimilarityLabel: HTMLSpanElement | null = null;
 	private semanticWarningEl: HTMLDivElement | null = null;
+	private semanticSectionEl: HTMLDivElement | null = null;
 	// Agent progress UI refs
 	private agentProgressContainer: HTMLDivElement | null = null;
 	// Manual notes picker
@@ -1698,10 +1742,10 @@ class AIAssistantView extends ItemView {
 		this.maxFolderLabel = maxFolder.label;
 
 		// Semantic search section
-		const semanticSection = contextContent.createDiv({ cls: 'ai-assistant-semantic-section' });
+		this.semanticSectionEl = contextContent.createDiv({ cls: 'ai-assistant-semantic-section' });
 
 		// Max Semantic Notes slider (0-20)
-		const semanticCount = createSlider(semanticSection, 'Max semantic notes:', 0, 20,
+		const semanticCount = createSlider(this.semanticSectionEl, 'Max semantic notes:', 0, 20,
 			this.contextScopeConfig.semanticMatchCount,
 			(v) => this.updateSemanticCountLabel(v),
 			(v) => { this.contextScopeConfig.semanticMatchCount = v; }
@@ -1710,7 +1754,7 @@ class AIAssistantView extends ItemView {
 		this.semanticCountLabel = semanticCount.label;
 
 		// Min Similarity slider (0-100%)
-		const semanticSimilarity = createSlider(semanticSection, 'Min similarity:', 0, 100,
+		const semanticSimilarity = createSlider(this.semanticSectionEl, 'Min similarity:', 0, 100,
 			this.contextScopeConfig.semanticMinSimilarity,
 			(v) => this.updateSemanticSimilarityLabel(v),
 			(v) => { this.contextScopeConfig.semanticMinSimilarity = v; }
@@ -1719,7 +1763,7 @@ class AIAssistantView extends ItemView {
 		this.semanticSimilarityLabel = semanticSimilarity.label;
 
 		// No index warning (shown if no embeddings)
-		this.semanticWarningEl = semanticSection.createDiv({ cls: 'ai-assistant-semantic-warning' });
+		this.semanticWarningEl = this.semanticSectionEl.createDiv({ cls: 'ai-assistant-semantic-warning' });
 		this.updateSemanticSlidersState();
 
 		// Manually added notes section
@@ -1783,10 +1827,14 @@ class AIAssistantView extends ItemView {
 			this.showContextIndicator(initialFile.path, initialFile.basename);
 		}
 
-		// Context notes panel visibility depends on get_manual_context tool being enabled
+		// Context notes panel visibility depends on enableManualContext setting
 		if (this.contextDetails) {
-			const mcDisabled = (this.plugin.settings.disabledTools || []).includes('get_manual_context');
-			this.contextDetails.style.display = mcDisabled ? 'none' : 'block';
+			this.contextDetails.style.display = this.plugin.settings.enableManualContext ? 'block' : 'none';
+		}
+
+		// Semantic section visibility depends on enableEmbeddings setting
+		if (this.semanticSectionEl) {
+			this.semanticSectionEl.style.display = this.plugin.settings.enableEmbeddings ? '' : 'none';
 		}
 	}
 
@@ -1851,6 +1899,7 @@ class AIAssistantView extends ItemView {
 
 	isWebSearchConfigured(): boolean {
 		const s = this.plugin.settings;
+		if (!s.enableWebSearch) return false;
 		if (s.webAgentSearchApi === 'openai') return !!s.openaiApiKey;
 		return !!s.webAgentSearchApiKey;
 	}
@@ -1899,10 +1948,14 @@ class AIAssistantView extends ItemView {
 			this.updateSemanticSlidersState();
 			this.updateContextSummary();
 
-			// Toggle visibility of context panel based on get_manual_context being enabled
+			// Toggle visibility of context panel based on enableManualContext setting
 			if (this.contextDetails) {
-				const mcDisabled = (s.disabledTools || []).includes('get_manual_context');
-				this.contextDetails.style.display = mcDisabled ? 'none' : 'block';
+				this.contextDetails.style.display = s.enableManualContext ? 'block' : 'none';
+			}
+
+			// Toggle visibility of semantic section based on enableEmbeddings setting
+			if (this.semanticSectionEl) {
+				this.semanticSectionEl.style.display = s.enableEmbeddings ? '' : 'none';
 			}
 		}
 	}
@@ -2551,8 +2604,8 @@ class AIAssistantView extends ItemView {
 		let currentFileContent: string | undefined;
 		let currentFilePath: string | undefined;
 		if (file) {
-			if (isFileExcluded(file.path, this.plugin.settings.excludedFolders)) {
-				new Notice('Active file is in an excluded folder — not sent to AI.');
+			if (this.plugin.isFileExcluded(file)) {
+				new Notice('Active file is excluded (folder or privacy tag) — not sent to AI.');
 			} else {
 				const raw = await this.app.vault.cachedRead(file);
 				currentFileContent = stripPendingEditBlocks(raw, this.plugin.settings.pendingEditTag);
@@ -2607,6 +2660,7 @@ class AIAssistantView extends ItemView {
 			webTokenBudget: this.plugin.settings.webAgentTokenBudget,
 			disabledTools: this.plugin.settings.disabledTools || [],
 			whitelistedCommands: this.plugin.settings.whitelistedCommands || [],
+			customInfoTools: this.plugin.settings.customInfoTools || [],
 			customPrompts: {
 				character: this.plugin.settings.customInstructions
 			},
@@ -2661,7 +2715,7 @@ class AIAssistantView extends ItemView {
 			async readNote(path: string) {
 				const matchingFile = findNoteByAnyName(path);
 				if (!matchingFile) return null;
-				if (isFileExcluded(matchingFile.path, plugin.settings.excludedFolders)) {
+				if (plugin.isPathExcluded(matchingFile.path)) {
 					return { content: '', path: matchingFile.path, lineCount: 0, excluded: true };
 				}
 				const content = await app.vault.cachedRead(matchingFile);
@@ -2676,7 +2730,7 @@ class AIAssistantView extends ItemView {
 				const queryLower = query.toLowerCase();
 
 				for (const file of files) {
-					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) continue;
+					if (plugin.isPathExcluded(file.path)) continue;
 					if (results.length >= limit) break;
 
 					if (file.basename.toLowerCase().includes(queryLower)) {
@@ -2713,10 +2767,10 @@ class AIAssistantView extends ItemView {
 						plugin.settings.openaiApiKey,
 						plugin.settings.embeddingModel
 					);
-					// Build exclude paths from excluded folders
+					// Build exclude paths from excluded folders and privacy tags
 					const excludePaths = new Set<string>();
 					for (const chunk of plugin.embeddingIndex.chunks) {
-						if (isFileExcluded(chunk.notePath, plugin.settings.excludedFolders)) {
+						if (plugin.isPathExcluded(chunk.notePath)) {
 							excludePaths.add(chunk.notePath);
 						}
 					}
@@ -2733,7 +2787,7 @@ class AIAssistantView extends ItemView {
 
 				for (const file of files) {
 					if (results.length >= maxResults) break;
-					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) continue;
+					if (plugin.isPathExcluded(file.path)) continue;
 					if (folder && !file.path.startsWith(folder.endsWith('/') ? folder : folder + '/')) continue;
 
 					const cache = app.metadataCache.getFileCache(file);
@@ -2756,14 +2810,12 @@ class AIAssistantView extends ItemView {
 
 				const results: LinkInfo[] = [];
 				const maxDepth = depth || 1;
-				const excluded = plugin.settings.excludedFolders;
-
 				if (direction === 'outgoing' || direction === 'both') {
 					const cache = app.metadataCache.getFileCache(file);
 					for (const link of cache?.links ?? []) {
 						const linkedFile = app.metadataCache.getFirstLinkpathDest(link.link, file.path);
 						if (linkedFile && linkedFile instanceof TFile) {
-							if (isFileExcluded(linkedFile.path, excluded)) continue;
+							if (plugin.isPathExcluded(linkedFile.path)) continue;
 							results.push({ path: linkedFile.path, name: linkedFile.basename, direction: 'outgoing', depth: 1 });
 						}
 					}
@@ -2772,7 +2824,7 @@ class AIAssistantView extends ItemView {
 				if (direction === 'incoming' || direction === 'both') {
 					const backlinks = plugin.getBacklinkPaths(file);
 					for (const blPath of backlinks) {
-						if (isFileExcluded(blPath, excluded)) continue;
+						if (plugin.isPathExcluded(blPath)) continue;
 						results.push({ path: blPath, name: blPath.split('/').pop()?.replace('.md', '') || blPath, direction: 'incoming', depth: 1 });
 					}
 				}
@@ -2781,7 +2833,7 @@ class AIAssistantView extends ItemView {
 					const deepLinks = plugin.getLinkedFilesBFS(file, maxDepth);
 					const existing = new Set(results.map(r => r.path));
 					for (const p of deepLinks) {
-						if (!existing.has(p) && !isFileExcluded(p, excluded)) {
+						if (!existing.has(p) && !plugin.isPathExcluded(p)) {
 							results.push({ path: p, name: p.split('/').pop()?.replace('.md', '') || p, direction: 'both', depth: maxDepth });
 						}
 					}
@@ -2792,29 +2844,92 @@ class AIAssistantView extends ItemView {
 
 			async exploreStructure(action: string, args: Record<string, unknown>): Promise<string> {
 				if (action === 'list_folder') {
-					const folder = (args.path as string) || '';
+					let folderPath = (args.folder as string) || '';
+					if (folderPath === '/') folderPath = '';
 					// Block browsing excluded folders entirely
-					if (folder && isFolderExcluded(folder, plugin.settings.excludedFolders)) {
-						return `Folder "${folder}" is excluded and cannot be browsed.`;
+					if (folderPath && isFolderExcluded(folderPath, plugin.settings.excludedFolders)) {
+						return `Folder "${folderPath}" is excluded and cannot be browsed.`;
 					}
-					const abstractFolder = app.vault.getAbstractFileByPath(folder);
+					const abstractFolder = folderPath === ''
+						? app.vault.getRoot()
+						: app.vault.getAbstractFileByPath(folderPath);
 					if (abstractFolder && abstractFolder instanceof TFolder) {
-						const children = abstractFolder.children
-							.filter(c => {
-								if (c instanceof TFile) return !isFileExcluded(c.path, plugin.settings.excludedFolders);
-								// Hide excluded subfolders
-								return !isFolderExcluded(c.path, plugin.settings.excludedFolders);
-							})
-							.map(c => c instanceof TFile ? `${c.name} (note)` : `${c.name}/ (folder)`)
-							.sort();
-						return children.join('\n') || 'Empty folder';
+						const recursive = !!args.recursive;
+
+						const noteNames = args.note_names !== false;
+
+						if (recursive) {
+							const lines: string[] = [];
+							const MAX_ENTRIES = 200;
+
+							const walk = (folder: TFolder, indent: string) => {
+								const children = folder.children
+									.filter(c => {
+										if (c instanceof TFile) return !plugin.isPathExcluded(c.path);
+										return !isFolderExcluded(c.path, plugin.settings.excludedFolders);
+									})
+									.sort((a, b) => {
+										const aIsFolder = a instanceof TFolder;
+										const bIsFolder = b instanceof TFolder;
+										if (aIsFolder !== bIsFolder) return aIsFolder ? -1 : 1;
+										return a.name.localeCompare(b.name);
+									});
+
+								for (const c of children) {
+									if (lines.length >= MAX_ENTRIES) return;
+									if (c instanceof TFolder) {
+										if (noteNames) {
+											lines.push(`${indent}${c.name}/ (folder)`);
+										} else {
+											const directNotes = c.children.filter(ch => ch instanceof TFile && !plugin.isPathExcluded(ch.path)).length;
+											lines.push(`${indent}${c.name}/ (${directNotes} notes)`);
+										}
+										walk(c, indent + '  ');
+									} else if (noteNames) {
+										lines.push(`${indent}${c.name} (note)`);
+									}
+								}
+							};
+
+							if (!noteNames) {
+								const rootNotes = abstractFolder.children.filter(c => c instanceof TFile && !plugin.isPathExcluded(c.path)).length;
+								if (rootNotes > 0) lines.push(`(${rootNotes} notes in root)`);
+							}
+							walk(abstractFolder, '');
+							let result = lines.join('\n') || 'Empty folder';
+							if (lines.length >= MAX_ENTRIES) {
+								result += `\n... truncated at ${MAX_ENTRIES} entries (use non-recursive listing for specific folders)`;
+							}
+							return result;
+						} else {
+							const children = abstractFolder.children
+								.filter(c => {
+									if (c instanceof TFile) return !plugin.isPathExcluded(c.path);
+									// Hide excluded subfolders
+									return !isFolderExcluded(c.path, plugin.settings.excludedFolders);
+								});
+							if (noteNames) {
+								return children
+									.map(c => c instanceof TFile ? `${c.name} (note)` : `${c.name}/ (folder)`)
+									.sort()
+									.join('\n') || 'Empty folder';
+							} else {
+								const folders = children.filter(c => c instanceof TFolder);
+								const noteCount = children.filter(c => c instanceof TFile).length;
+								const folderLines = folders
+									.map(c => `${c.name}/ (folder)`)
+									.sort();
+								if (noteCount > 0) folderLines.push(`(${noteCount} notes)`);
+								return folderLines.join('\n') || 'Empty folder';
+							}
+						}
 					}
-					return `Folder not found: ${folder}`;
+					return `Folder not found: ${folderPath}`;
 				} else if (action === 'find_by_tag') {
 					const tag = (args.tag as string || '').replace(/^#/, '');
 					const matches: string[] = [];
 					for (const f of app.vault.getMarkdownFiles()) {
-						if (isFileExcluded(f.path, plugin.settings.excludedFolders)) continue;
+						if (plugin.isPathExcluded(f.path)) continue;
 						const cache = app.metadataCache.getFileCache(f);
 						const fmTags = cache?.frontmatter?.tags;
 						const inlineTags = cache?.tags?.map(t => t.tag.replace(/^#/, ''));
@@ -2834,7 +2949,7 @@ class AIAssistantView extends ItemView {
 			async listTags(): Promise<{ tag: string; count: number }[]> {
 				const tagCounts = new Map<string, number>();
 				for (const f of app.vault.getMarkdownFiles()) {
-					if (isFileExcluded(f.path, plugin.settings.excludedFolders)) continue;
+					if (plugin.isPathExcluded(f.path)) continue;
 					const cache = app.metadataCache.getFileCache(f);
 					const tags: string[] = [];
 					if (cache?.frontmatter?.tags) {
@@ -2856,7 +2971,7 @@ class AIAssistantView extends ItemView {
 
 			async getAllNotes(includeMetadata?: boolean) {
 				return app.vault.getMarkdownFiles()
-					.filter(f => !isFileExcluded(f.path, plugin.settings.excludedFolders))
+					.filter(f => !plugin.isPathExcluded(f.path))
 					.map(f => {
 						const result: { path: string; aliases?: string[]; description?: string } = { path: f.path };
 						if (includeMetadata) {
@@ -2872,7 +2987,7 @@ class AIAssistantView extends ItemView {
 					});
 			},
 
-			async getManualContext(): Promise<string> {
+			async getManualContext(summaryOnly?: boolean): Promise<string> {
 				const scopeConfig = view.contextScopeConfig;
 				const hasConfig = scopeConfig.linkDepth > 0
 					|| scopeConfig.maxFolderNotes > 0
@@ -2888,17 +3003,83 @@ class AIAssistantView extends ItemView {
 					return 'No active file is open. Manual context requires an active note as the starting point for linked/folder notes. Ask the user to open a note first.';
 				}
 
-				const context = await plugin.buildContextWithScopeConfig(activeFile, '', scopeConfig);
-				if (!context || context.trim().length === 0) {
-					return 'Manual context is configured but returned no content. The linked/folder/semantic notes may be empty.';
-				}
-
 				const configParts: string[] = [];
 				if (scopeConfig.linkDepth > 0) configParts.push(`link depth: ${scopeConfig.linkDepth}`);
 				if (scopeConfig.maxLinkedNotes > 0) configParts.push(`max linked: ${scopeConfig.maxLinkedNotes}`);
 				if (scopeConfig.maxFolderNotes > 0) configParts.push(`folder notes: ${scopeConfig.maxFolderNotes}`);
 				if (scopeConfig.semanticMatchCount > 0) configParts.push(`semantic matches: ${scopeConfig.semanticMatchCount}`);
 				if (scopeConfig.manuallyAddedNotes && scopeConfig.manuallyAddedNotes.length > 0) configParts.push(`manually added: ${scopeConfig.manuallyAddedNotes.length}`);
+
+				if (summaryOnly) {
+					const summaryLines: string[] = [];
+					const seenFiles = new Set<string>();
+					seenFiles.add(activeFile.path);
+
+					const getPreview = async (file: TFile): Promise<string> => {
+						const content = await app.vault.cachedRead(file);
+						return content.split('\n').filter((l: string) => l.trim()).slice(0, 2).join(' | ');
+					};
+
+					if (!plugin.isFileExcluded(activeFile)) {
+						const preview = await getPreview(activeFile);
+						summaryLines.push(`[current] ${activeFile.path} — ${preview}`);
+					}
+
+					if (scopeConfig.linkDepth > 0 && scopeConfig.maxLinkedNotes > 0) {
+						const linkedFiles = plugin.getLinkedFilesBFS(activeFile, scopeConfig.linkDepth);
+						const limitedLinked = [...linkedFiles].slice(0, scopeConfig.maxLinkedNotes);
+						for (const linkedPath of limitedLinked) {
+							if (!seenFiles.has(linkedPath)) {
+								seenFiles.add(linkedPath);
+								const linkedFile = app.vault.getAbstractFileByPath(linkedPath);
+								if (linkedFile instanceof TFile) {
+									const preview = await getPreview(linkedFile);
+									summaryLines.push(`[linked] ${linkedFile.path} — ${preview}`);
+								}
+							}
+						}
+					}
+
+					if (scopeConfig.maxFolderNotes > 0) {
+						const folderFiles = plugin.getSameFolderFiles(activeFile);
+						const limitedFolder = [...folderFiles].slice(0, scopeConfig.maxFolderNotes);
+						for (const folderPath of limitedFolder) {
+							if (!seenFiles.has(folderPath)) {
+								seenFiles.add(folderPath);
+								const folderFile = app.vault.getAbstractFileByPath(folderPath);
+								if (folderFile instanceof TFile) {
+									const preview = await getPreview(folderFile);
+									summaryLines.push(`[folder] ${folderFile.path} — ${preview}`);
+								}
+							}
+						}
+					}
+
+					if (scopeConfig.manuallyAddedNotes && scopeConfig.manuallyAddedNotes.length > 0) {
+						for (const manualPath of scopeConfig.manuallyAddedNotes) {
+							if (!seenFiles.has(manualPath)) {
+								seenFiles.add(manualPath);
+								const manualFile = app.vault.getAbstractFileByPath(manualPath);
+								if (manualFile instanceof TFile && !plugin.isFileExcluded(manualFile)) {
+									const preview = await getPreview(manualFile);
+									summaryLines.push(`[manual] ${manualFile.path} — ${preview}`);
+								}
+							}
+						}
+					}
+
+					if (summaryLines.length === 0) {
+						return 'Manual context is configured but no notes were found. The linked/folder notes may be empty or excluded.';
+					}
+
+					const header = `=== Manual Context Summary (${configParts.join(', ')}, ${summaryLines.length} notes) ===\n`;
+					return header + summaryLines.join('\n') + '\n\nUse get_manual_context without summary_only to get full content, or read_note to read specific notes.';
+				}
+
+				const context = await plugin.buildContextWithScopeConfig(activeFile, '', scopeConfig);
+				if (!context || context.trim().length === 0) {
+					return 'Manual context is configured but returned no content. The linked/folder/semantic notes may be empty.';
+				}
 
 				const header = `=== Manual Context (${configParts.join(', ')}) ===\n`;
 				return header + context;
@@ -2953,8 +3134,8 @@ class AIAssistantView extends ItemView {
 				if (!view.capabilities.canCreate) {
 					return { success: false, error: 'Creating new files is not allowed (capability disabled)' };
 				}
-				if (isFileExcluded(path, plugin.settings.excludedFolders)) {
-					return { success: false, error: 'Cannot create notes in an excluded folder' };
+				if (plugin.isPathExcluded(path)) {
+					return { success: false, error: 'Cannot create notes in an excluded location' };
 				}
 				try {
 					const folderPath = path.substring(0, path.lastIndexOf('/'));
@@ -2989,8 +3170,8 @@ class AIAssistantView extends ItemView {
 			},
 
 			async moveNote(from: string, to: string) {
-				if (isFileExcluded(from, plugin.settings.excludedFolders)) {
-					return { success: false, error: 'Note is in an excluded folder' };
+				if (plugin.isPathExcluded(from)) {
+					return { success: false, error: 'Note is excluded (folder or privacy tag)' };
 				}
 				const f = app.vault.getAbstractFileByPath(from);
 				if (!(f instanceof TFile)) {
@@ -3009,8 +3190,8 @@ class AIAssistantView extends ItemView {
 			},
 
 			async updateProperties(path: string, props: Record<string, unknown>) {
-				if (isFileExcluded(path, plugin.settings.excludedFolders)) {
-					return { success: false, error: 'Note is in an excluded folder' };
+				if (plugin.isPathExcluded(path)) {
+					return { success: false, error: 'Note is excluded (folder or privacy tag)' };
 				}
 				const f = app.vault.getAbstractFileByPath(path);
 				if (!(f instanceof TFile)) {
@@ -3030,8 +3211,8 @@ class AIAssistantView extends ItemView {
 			},
 
 			async addTags(path: string, tags: string[]) {
-				if (isFileExcluded(path, plugin.settings.excludedFolders)) {
-					return { success: false, error: 'Note is in an excluded folder' };
+				if (plugin.isPathExcluded(path)) {
+					return { success: false, error: 'Note is excluded (folder or privacy tag)' };
 				}
 				const f = app.vault.getAbstractFileByPath(path);
 				if (!(f instanceof TFile)) {
@@ -3051,8 +3232,8 @@ class AIAssistantView extends ItemView {
 			},
 
 			async linkNotes(source: string, target: string, context?: string) {
-				if (isFileExcluded(source, plugin.settings.excludedFolders)) {
-					return { success: false, error: 'Note is in an excluded folder' };
+				if (plugin.isPathExcluded(source)) {
+					return { success: false, error: 'Note is excluded (folder or privacy tag)' };
 				}
 				const sourceFile = app.vault.getAbstractFileByPath(source);
 				if (!(sourceFile instanceof TFile)) {
@@ -3089,7 +3270,7 @@ class AIAssistantView extends ItemView {
 			async copyNotes(paths: string[]) {
 				const contents: string[] = [];
 				for (const p of paths) {
-					if (isFileExcluded(p, plugin.settings.excludedFolders)) continue;
+					if (plugin.isPathExcluded(p)) continue;
 					const f = app.vault.getAbstractFileByPath(p);
 					if (f instanceof TFile) {
 						const content = await app.vault.cachedRead(f);
@@ -3108,7 +3289,7 @@ class AIAssistantView extends ItemView {
 			async getProperties(path: string) {
 				const file = findNoteByAnyName(path);
 				if (!file) return null;
-				if (isFileExcluded(file.path, plugin.settings.excludedFolders)) return null;
+				if (plugin.isPathExcluded(file.path)) return null;
 				const cache = app.metadataCache.getFileCache(file);
 				const fm = cache?.frontmatter;
 				if (!fm) return {};
@@ -3122,7 +3303,7 @@ class AIAssistantView extends ItemView {
 			async getFileInfo(path: string) {
 				const file = findNoteByAnyName(path);
 				if (!file) return null;
-				if (isFileExcluded(file.path, plugin.settings.excludedFolders)) return null;
+				if (plugin.isPathExcluded(file.path)) return null;
 				return {
 					created: file.stat.ctime,
 					modified: file.stat.mtime,
@@ -3135,7 +3316,7 @@ class AIAssistantView extends ItemView {
 				if (!unresolvedLinks) return [];
 				const results: Array<{ source: string; deadLink: string }> = [];
 				for (const [sourcePath, links] of Object.entries(unresolvedLinks)) {
-					if (isFileExcluded(sourcePath, plugin.settings.excludedFolders)) continue;
+					if (plugin.isPathExcluded(sourcePath)) continue;
 					if (path) {
 						const file = findNoteByAnyName(path);
 						if (!file || file.path !== sourcePath) continue;
@@ -3152,7 +3333,7 @@ class AIAssistantView extends ItemView {
 				let results: Array<{ path: string; matchingProperties?: Record<string, unknown>; modified?: number; created?: number }> = [];
 
 				for (const file of files) {
-					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) continue;
+					if (plugin.isPathExcluded(file.path)) continue;
 
 					if (options.modified_after) {
 						const afterMs = new Date(options.modified_after).getTime();
@@ -3213,8 +3394,8 @@ class AIAssistantView extends ItemView {
 				try {
 					const file = findNoteByAnyName(path);
 					if (!file) return { success: false, error: `Note not found: "${path}"` };
-					if (isFileExcluded(file.path, plugin.settings.excludedFolders)) {
-						return { success: false, error: 'Note is in an excluded folder' };
+					if (plugin.isPathExcluded(file.path)) {
+						return { success: false, error: 'Note is excluded (folder or privacy tag)' };
 					}
 					// Don't delete immediately — show confirmation bubble
 					view.renderPendingDeletionBubble(file);
@@ -3241,6 +3422,22 @@ class AIAssistantView extends ItemView {
 			async listCommands() {
 				const commands = (app as any).commands.listCommands() as Array<{ id: string; name: string }>;
 				return commands.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }));
+			},
+
+			async resolveCustomInfoTool(toolName: string): Promise<string | null> {
+				const tool = (plugin.settings.customInfoTools || []).find(t => t.toolName === toolName && t.enabled);
+				if (!tool) return null;
+				if (tool.contentType === 'inline') {
+					return tool.inlineContent || '(empty)';
+				}
+				if (tool.contentType === 'note' && tool.notePath) {
+					const file = app.vault.getAbstractFileByPath(tool.notePath);
+					if (file && file instanceof TFile) {
+						return await app.vault.cachedRead(file);
+					}
+					return `Error: Note "${tool.notePath}" not found in vault.`;
+				}
+				return null;
 			},
 
 			async askUser(question: string, choices?: string[]) {
@@ -3573,6 +3770,8 @@ class AIAssistantSettingTab extends PluginSettingTab {
 	private webSearchEl: HTMLElement | null = null;
 	private cmdWhitelistEl: HTMLElement | null = null;
 	private toolToggleWrapper: HTMLElement | null = null;
+	private manualContextEl: HTMLElement | null = null;
+	private semanticSettingsEls: HTMLElement[] | null = null;
 
 	constructor(app: App, plugin: MyPlugin) {
 		super(app, plugin);
@@ -3630,27 +3829,33 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// Web Search toggle
+		const webSearchChildEls: HTMLElement[] = [];
+
 		new Setting(containerEl)
-			.setName('Embedding Model')
-			.setDesc('Model for semantic search. Small is cheaper, large is more accurate.')
-			.addDropdown(dropdown => dropdown
-				.addOption('text-embedding-3-small', 'text-embedding-3-small (cheaper)')
-				.addOption('text-embedding-3-large', 'text-embedding-3-large (more accurate)')
-				.setValue(this.plugin.settings.embeddingModel)
+			.setName('Enable Web Search')
+			.setDesc('Enable web search and webpage reading tools')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableWebSearch)
 				.onChange(async (value) => {
-					this.plugin.settings.embeddingModel = value as EmbeddingModel;
+					this.plugin.settings.enableWebSearch = value;
 					await this.plugin.saveSettings();
+					webSearchChildEls.forEach(el => el.style.display = value ? '' : 'none');
+					this.updateConditionalSections();
+					this.plugin.notifySettingsChanged('web');
 				}));
 
 		// Search API settings (for Web Agent)
-		containerEl.createEl('p', {
+		const webInfoEl = containerEl.createEl('p', {
 			text: 'Web search is optional. Configure a search API to enable web_search and read_webpage tools.',
 			cls: 'setting-item-description',
-		}).style.marginBottom = '8px';
+		});
+		webInfoEl.style.marginBottom = '8px';
+		webSearchChildEls.push(webInfoEl);
 
 		let searchApiKeySetting: Setting | null = null;
 
-		new Setting(containerEl)
+		const searchApiSetting = new Setting(containerEl)
 			.setName('Search API')
 			.setDesc('Which search API to use for web searches')
 			.addDropdown(dropdown => dropdown
@@ -3667,6 +3872,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					}
 					this.plugin.notifySettingsChanged('web');
 				}));
+		webSearchChildEls.push(searchApiSetting.settingEl);
 
 		searchApiKeySetting = new Setting(containerEl)
 			.setName('Search API Key')
@@ -3683,18 +3889,58 @@ class AIAssistantSettingTab extends PluginSettingTab {
 						this.plugin.notifySettingsChanged('web');
 					});
 			});
+		webSearchChildEls.push(searchApiKeySetting.settingEl);
 
 		if (this.plugin.settings.webAgentSearchApi === 'openai') {
 			searchApiKeySetting.settingEl.style.display = 'none';
 		}
 
-		// Reindex button and status
-		containerEl.createEl('p', {
-			text: 'Embeddings enable semantic (concept-based) search. This is optional — the plugin works fully without it.',
-			cls: 'setting-item-description',
-		}).style.marginBottom = '8px';
+		// Hide web search children if toggle is off
+		if (!this.plugin.settings.enableWebSearch) {
+			webSearchChildEls.forEach(el => el.style.display = 'none');
+		}
+
+		// Embeddings toggle
+		const embeddingsChildEls: HTMLElement[] = [];
 
 		new Setting(containerEl)
+			.setName('Enable Embeddings')
+			.setDesc('Enable semantic (concept-based) search via embeddings')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableEmbeddings)
+				.onChange(async (value) => {
+					this.plugin.settings.enableEmbeddings = value;
+					await this.plugin.saveSettings();
+					embeddingsChildEls.forEach(el => el.style.display = value ? '' : 'none');
+					// Also hide/show semantic settings in section 6a and chat view
+					if (this.semanticSettingsEls) {
+						this.semanticSettingsEls.forEach(el => el.style.display = value ? '' : 'none');
+					}
+					this.plugin.notifySettingsChanged('context');
+				}));
+
+		const embModelSetting = new Setting(containerEl)
+			.setName('Embedding Model')
+			.setDesc('Model for semantic search. Small is cheaper, large is more accurate.')
+			.addDropdown(dropdown => dropdown
+				.addOption('text-embedding-3-small', 'text-embedding-3-small (cheaper)')
+				.addOption('text-embedding-3-large', 'text-embedding-3-large (more accurate)')
+				.setValue(this.plugin.settings.embeddingModel)
+				.onChange(async (value) => {
+					this.plugin.settings.embeddingModel = value as EmbeddingModel;
+					await this.plugin.saveSettings();
+				}));
+		embeddingsChildEls.push(embModelSetting.settingEl);
+
+		// Reindex button and status
+		const embInfoEl = containerEl.createEl('p', {
+			text: 'Embeddings enable semantic (concept-based) search. This is optional — the plugin works fully without it.',
+			cls: 'setting-item-description',
+		});
+		embInfoEl.style.marginBottom = '8px';
+		embeddingsChildEls.push(embInfoEl);
+
+		const reindexSetting = new Setting(containerEl)
 			.setName('Reindex Embeddings')
 			.setDesc('Rebuild the embedding index for all notes. Only changed notes will be re-embedded.')
 			.addButton(button => button
@@ -3702,8 +3948,16 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onClick(async () => {
 					await this.handleReindex(button);
 				}));
+		embeddingsChildEls.push(reindexSetting.settingEl);
 
-		this.renderIndexStatus(containerEl);
+		const indexStatusContainer = containerEl.createDiv();
+		this.renderIndexStatus(indexStatusContainer);
+		embeddingsChildEls.push(indexStatusContainer);
+
+		// Hide embeddings children if toggle is off
+		if (!this.plugin.settings.enableEmbeddings) {
+			embeddingsChildEls.forEach(el => el.style.display = 'none');
+		}
 
 		// ============================================
 		// SECTION 2: Customize AI
@@ -3769,11 +4023,11 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				}));
 
 		// ============================================
-		// SECTION 4: Excluded Folders
+		// SECTION 4: Privacy
 		// ============================================
-		containerEl.createEl('h3', { text: 'Excluded Folders' });
+		containerEl.createEl('h3', { text: 'Privacy' });
 		containerEl.createEl('p', {
-			text: 'Notes in these folders will never be sent to the AI or shown in context.',
+			text: 'Control which notes and folders are hidden from the AI.',
 			cls: 'setting-item-description'
 		});
 
@@ -3782,34 +4036,22 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Add Excluded Folder')
-			.setDesc('Enter a folder path (e.g., "Private" or "Sensitive/Data")')
-			.addText(text => {
-				text.setPlaceholder('Folder path...');
-				text.inputEl.addEventListener('keydown', async (e) => {
-					if (e.key === 'Enter') {
-						const value = text.getValue().trim();
-						if (value && !this.plugin.settings.excludedFolders.includes(value)) {
-							this.plugin.settings.excludedFolders.push(value);
-							await this.plugin.saveSettings();
-							await this.purgeExcludedEmbeddings(value);
-							text.setValue('');
-							this.renderExcludedFolders(excludedListEl);
-						}
-					}
-				});
-			})
+			.setDesc('Pick a vault folder to exclude from AI access.')
 			.addButton(button => button
-				.setButtonText('Add')
-				.onClick(async () => {
-					const input = containerEl.querySelector('.excluded-folders-list + .setting-item input') as HTMLInputElement;
-					const value = input?.value.trim();
-					if (value && !this.plugin.settings.excludedFolders.includes(value)) {
-						this.plugin.settings.excludedFolders.push(value);
-						await this.plugin.saveSettings();
-						await this.purgeExcludedEmbeddings(value);
-						input.value = '';
-						this.renderExcludedFolders(excludedListEl);
-					}
+				.setButtonText('+ Add Folder')
+				.onClick(() => {
+					this.showFolderPicker(excludedListEl);
+				}));
+
+		new Setting(containerEl)
+			.setName('Privacy Tag')
+			.setDesc('Notes with this tag will never be sent to the AI. Leave empty to disable.')
+			.addText(text => text
+				.setPlaceholder('#private')
+				.setValue(this.plugin.settings.excludedTag)
+				.onChange(async (value) => {
+					this.plugin.settings.excludedTag = value.replace(/^#/, '').trim();
+					await this.plugin.saveSettings();
 				}));
 
 		// ============================================
@@ -3832,12 +4074,27 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		// ============================================
 		containerEl.createEl('h3', { text: 'Agent Settings' });
 
+		// Manual Context toggle
+		new Setting(containerEl)
+			.setName('Enable Manual Context')
+			.setDesc('Enable manual context panel in chat for controlling which notes are sent to the AI')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableManualContext)
+				.onChange(async (value) => {
+					this.plugin.settings.enableManualContext = value;
+					await this.plugin.saveSettings();
+					if (this.manualContextEl) {
+						this.manualContextEl.style.display = value ? '' : 'none';
+					}
+					this.plugin.notifySettingsChanged('context');
+				}));
+
 		// 6a: Manual Context
-		const focusedDefaultsEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
-		const focusedSummary = focusedDefaultsEl.createEl('summary');
+		this.manualContextEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const focusedSummary = this.manualContextEl.createEl('summary');
 		focusedSummary.setText('Manual Context');
 
-		const focusedContent = focusedDefaultsEl.createDiv({ cls: 'ai-settings-collapsible-content' });
+		const focusedContent = this.manualContextEl.createDiv({ cls: 'ai-settings-collapsible-content' });
 
 		new Setting(focusedContent)
 			.setName('Link Depth')
@@ -3878,7 +4135,10 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					this.plugin.notifySettingsChanged('context');
 				}));
 
-		new Setting(focusedContent)
+		// Semantic settings in Manual Context (hidden when embeddings disabled)
+		this.semanticSettingsEls = [];
+
+		const semanticNoteSetting = new Setting(focusedContent)
 			.setName('Max Semantic Notes')
 			.setDesc('Default max semantic notes (0-20)')
 			.addSlider(slider => slider
@@ -3890,8 +4150,9 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					this.plugin.notifySettingsChanged('context');
 				}));
+		this.semanticSettingsEls.push(semanticNoteSetting.settingEl);
 
-		new Setting(focusedContent)
+		const semanticSimSetting = new Setting(focusedContent)
 			.setName('Min Similarity Threshold')
 			.setDesc('Default min similarity threshold (0-100%)')
 			.addSlider(slider => slider
@@ -3903,6 +4164,17 @@ class AIAssistantSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					this.plugin.notifySettingsChanged('context');
 				}));
+		this.semanticSettingsEls.push(semanticSimSetting.settingEl);
+
+		// Hide semantic settings if embeddings disabled
+		if (!this.plugin.settings.enableEmbeddings) {
+			this.semanticSettingsEls.forEach(el => el.style.display = 'none');
+		}
+
+		// Hide manual context section if toggle is off
+		if (!this.plugin.settings.enableManualContext) {
+			this.manualContextEl.style.display = 'none';
+		}
 
 		// 6b: Agent
 		const agentEl = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
@@ -4033,6 +4305,13 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		const cmdWhitelistContent = this.cmdWhitelistEl.createDiv({ cls: 'ai-settings-collapsible-content' });
 		this.renderCommandWhitelist(cmdWhitelistContent);
 
+		// 6f: Custom Info Tools
+		const customInfoDetails = containerEl.createEl('details', { cls: 'ai-settings-collapsible' });
+		const customInfoSummary = customInfoDetails.createEl('summary');
+		customInfoSummary.setText('Custom Info Tools');
+		const customInfoContent = customInfoDetails.createDiv({ cls: 'ai-settings-collapsible-content' });
+		this.renderCustomInfoTools(customInfoContent);
+
 		// Apply conditional section visibility
 		this.updateConditionalSections();
 
@@ -4073,6 +4352,12 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				this.plugin.logger
 			);
 
+			// Compute tag-excluded paths
+			const tagExcludedPaths = new Set<string>();
+			for (const f of this.app.vault.getMarkdownFiles()) {
+				if (this.plugin.isNotePrivate(f.path)) tagExcludedPaths.add(f.path);
+			}
+
 			const result = await reindexVault(
 				this.app.vault,
 				this.plugin.settings.excludedFolders,
@@ -4082,7 +4367,8 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				(current, total, status) => {
 					progressNotice.setMessage(`Indexing... ${current}/${total} notes`);
 				},
-				this.plugin.logger
+				this.plugin.logger,
+				tagExcludedPaths
 			);
 
 			await saveEmbeddingIndex(
@@ -4210,7 +4496,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			this.editRulesEl.style.display = disabled.has('edit_note') ? 'none' : '';
 		}
 		if (this.webSearchEl) {
-			const webHidden = disabled.has('web_search') && disabled.has('read_webpage');
+			const webHidden = !this.plugin.settings.enableWebSearch || (disabled.has('web_search') && disabled.has('read_webpage'));
 			this.webSearchEl.style.display = webHidden ? 'none' : '';
 		}
 		if (this.cmdWhitelistEl) {
@@ -4342,6 +4628,27 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		renderGroup('Web Tools', webToolNames);
 		renderGroup('Action Tools', actionTools);
 		renderGroup('Advanced Tools', advancedTools);
+
+		// Custom info tools group (only if any exist)
+		const customInfoTools = s.customInfoTools || [];
+		if (customInfoTools.length > 0) {
+			const group = wrapper.createDiv({ cls: 'ai-tool-toggle-group' });
+			group.createDiv({ cls: 'ai-tool-toggle-group-label', text: 'Info Tools' });
+			const pills = group.createDiv({ cls: 'ai-tool-toggle-pills' });
+
+			for (const tool of customInfoTools) {
+				const pill = pills.createEl('span', {
+					text: tool.name,
+					cls: 'ai-tool-toggle-pill'
+				});
+				pill.addClass(tool.enabled ? 'is-on' : 'is-off');
+				pill.addEventListener('click', async () => {
+					tool.enabled = !tool.enabled;
+					await this.plugin.saveSettings();
+					this.renderToolTogglePills(wrapper);
+				});
+			}
+		}
 	}
 
 	/**
@@ -4388,6 +4695,50 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onClick(() => {
 					this.showCommandPicker(container);
 				}));
+	}
+
+	/**
+	 * Show a searchable folder picker modal for excluded folders.
+	 */
+	private showFolderPicker(excludedListEl: HTMLElement) {
+		const allFolders = this.app.vault.getAllLoadedFiles()
+			.filter((f): f is TFolder => f instanceof TFolder)
+			.map(f => f.path)
+			.filter(p => p !== '/')
+			.sort();
+
+		const existingSet = new Set(this.plugin.settings.excludedFolders);
+		const available = allFolders.filter(p => !existingSet.has(p));
+
+		const { FuzzySuggestModal } = require('obsidian');
+		const modal = new (class extends FuzzySuggestModal<string> {
+			settingsTab: AIAssistantSettingTab;
+			container: HTMLElement;
+
+			constructor(app: App, settingsTab: AIAssistantSettingTab, container: HTMLElement) {
+				super(app);
+				this.settingsTab = settingsTab;
+				this.container = container;
+			}
+
+			getItems() {
+				return available;
+			}
+
+			getItemText(item: string) {
+				return item;
+			}
+
+			async onChooseItem(item: string) {
+				this.settingsTab.plugin.settings.excludedFolders.push(item);
+				await this.settingsTab.plugin.saveSettings();
+				await this.settingsTab.purgeExcludedEmbeddings(item);
+				this.settingsTab.renderExcludedFolders(this.container);
+			}
+		})(this.app, this, excludedListEl);
+
+		modal.setPlaceholder('Search folders...');
+		modal.open();
 	}
 
 	/**
@@ -4481,6 +4832,249 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				this.contentEl.empty();
 			}
 		})(this.app, this, command, whitelistContainer);
+
+		modal.open();
+	}
+
+	/**
+	 * Render custom info tools list with card-styled items.
+	 */
+	private renderCustomInfoTools(container: HTMLElement) {
+		container.empty();
+
+		const tools = this.plugin.settings.customInfoTools || [];
+
+		if (tools.length === 0) {
+			container.createDiv({
+				text: 'No custom info tools yet.',
+				cls: 'ai-custom-info-empty'
+			});
+		} else {
+			const listEl = container.createDiv({ cls: 'ai-custom-info-list' });
+			for (const tool of tools) {
+				const item = listEl.createDiv({ cls: 'ai-custom-info-item' });
+
+				// Toggle
+				const toggle = item.createEl('input', { type: 'checkbox', cls: 'ai-custom-info-toggle' });
+				(toggle as HTMLInputElement).checked = tool.enabled;
+				toggle.addEventListener('change', async () => {
+					tool.enabled = (toggle as HTMLInputElement).checked;
+					await this.plugin.saveSettings();
+					if (this.toolToggleWrapper) this.renderToolTogglePills(this.toolToggleWrapper);
+				});
+
+				// Info section
+				const info = item.createDiv({ cls: 'ai-custom-info-info' });
+				info.createDiv({ text: tool.name, cls: 'ai-custom-info-name' });
+				const sourceLabel = tool.contentType === 'note'
+					? `Note: ${tool.notePath || '(none)'}`
+					: `Inline (${(tool.inlineContent || '').length} chars)`;
+				info.createDiv({ text: sourceLabel, cls: 'ai-custom-info-source' });
+				info.createDiv({ text: tool.triggerDescription, cls: 'ai-custom-info-trigger' });
+
+				// Edit button
+				const editBtn = item.createEl('button', {
+					text: 'Edit',
+					cls: 'ai-custom-info-edit',
+					attr: { 'aria-label': `Edit ${tool.name}` }
+				});
+				editBtn.addEventListener('click', () => {
+					this.showCustomInfoToolModal(container, tool);
+				});
+
+				// Remove button
+				const removeBtn = item.createEl('button', {
+					text: '\u00d7',
+					cls: 'ai-custom-info-remove',
+					attr: { 'aria-label': `Remove ${tool.name}` }
+				});
+				removeBtn.addEventListener('click', async () => {
+					this.plugin.settings.customInfoTools = this.plugin.settings.customInfoTools.filter(
+						t => t.id !== tool.id
+					);
+					await this.plugin.saveSettings();
+					this.renderCustomInfoTools(container);
+					if (this.toolToggleWrapper) this.renderToolTogglePills(this.toolToggleWrapper);
+				});
+			}
+		}
+
+		// Add button
+		new Setting(container)
+			.addButton(button => button
+				.setButtonText('+ Add Info Tool')
+				.setCta()
+				.onClick(() => {
+					this.showCustomInfoToolModal(container);
+				}));
+	}
+
+	/**
+	 * Show a modal to create or edit a custom info tool.
+	 */
+	private showCustomInfoToolModal(listContainer: HTMLElement, existingTool?: CustomInfoTool) {
+		const { Modal } = require('obsidian');
+		const settingsTab = this;
+
+		const modal = new (class extends Modal {
+			constructor(app: App) {
+				super(app);
+			}
+
+			onOpen() {
+				const { contentEl } = this;
+				contentEl.createEl('h3', { text: existingTool ? 'Edit Info Tool' : 'New Info Tool' });
+
+				// Name
+				contentEl.createEl('label', { text: 'Name', cls: 'ai-custom-info-modal-label' });
+				const nameInput = contentEl.createEl('input', {
+					type: 'text',
+					placeholder: 'e.g., Dataview Syntax',
+					cls: 'ai-custom-info-modal-input'
+				});
+				nameInput.value = existingTool?.name || '';
+
+				// Trigger Description
+				contentEl.createEl('label', { text: 'Trigger Description', cls: 'ai-custom-info-modal-label' });
+				const triggerInput = contentEl.createEl('input', {
+					type: 'text',
+					placeholder: 'Call this when the user asks about Dataview queries...',
+					cls: 'ai-custom-info-modal-input'
+				});
+				triggerInput.value = existingTool?.triggerDescription || '';
+
+				// Content Source
+				contentEl.createEl('label', { text: 'Content Source', cls: 'ai-custom-info-modal-label' });
+				const radioRow = contentEl.createDiv({ cls: 'ai-custom-info-modal-radio-row' });
+
+				const inlineRadio = radioRow.createEl('label', { cls: 'ai-assistant-radio-label' });
+				const inlineInput = inlineRadio.createEl('input', { type: 'radio', attr: { name: 'contentType', value: 'inline' } });
+				inlineRadio.appendText(' Inline Text');
+
+				const noteRadio = radioRow.createEl('label', { cls: 'ai-assistant-radio-label' });
+				const noteInput = noteRadio.createEl('input', { type: 'radio', attr: { name: 'contentType', value: 'note' } });
+				noteRadio.appendText(' Vault Note');
+
+				// Inline textarea
+				const inlineSection = contentEl.createDiv({ cls: 'ai-custom-info-modal-section' });
+				const inlineTextarea = inlineSection.createEl('textarea', {
+					placeholder: 'Paste reference content here...',
+					cls: 'ai-custom-info-modal-textarea'
+				});
+				inlineTextarea.value = existingTool?.inlineContent || '';
+
+				// Note path input + browse
+				const noteSection = contentEl.createDiv({ cls: 'ai-custom-info-modal-section' });
+				const noteRow = noteSection.createDiv({ cls: 'ai-custom-info-modal-note-row' });
+				const notePathInput = noteRow.createEl('input', {
+					type: 'text',
+					placeholder: 'Path/to/note.md',
+					cls: 'ai-custom-info-modal-input'
+				});
+				notePathInput.value = existingTool?.notePath || '';
+
+				const browseBtn = noteRow.createEl('button', { text: 'Browse', cls: 'mod-cta' });
+				browseBtn.addEventListener('click', () => {
+					const allNotes = settingsTab.app.vault.getMarkdownFiles().map(f => f.path).sort();
+					const { FuzzySuggestModal } = require('obsidian');
+					const pickerModal = new (class extends FuzzySuggestModal<string> {
+						notePathEl: HTMLInputElement;
+						constructor(app: App, notePathEl: HTMLInputElement) {
+							super(app);
+							this.notePathEl = notePathEl;
+						}
+						getItems() { return allNotes; }
+						getItemText(item: string) { return item; }
+						onChooseItem(item: string) {
+							this.notePathEl.value = item;
+						}
+					})(settingsTab.app, notePathInput as HTMLInputElement);
+					pickerModal.setPlaceholder('Search notes...');
+					pickerModal.open();
+				});
+
+				// Toggle sections based on radio
+				const updateSections = () => {
+					const isInline = (inlineInput as HTMLInputElement).checked;
+					inlineSection.style.display = isInline ? '' : 'none';
+					noteSection.style.display = isInline ? 'none' : '';
+				};
+
+				(inlineInput as HTMLInputElement).checked = !existingTool || existingTool.contentType === 'inline';
+				(noteInput as HTMLInputElement).checked = existingTool?.contentType === 'note';
+				updateSections();
+
+				inlineInput.addEventListener('change', updateSections);
+				noteInput.addEventListener('change', updateSections);
+
+				// Buttons
+				const btnContainer = contentEl.createDiv({ cls: 'modal-button-container' });
+				const saveBtn = btnContainer.createEl('button', { text: 'Save', cls: 'mod-cta' });
+				saveBtn.addEventListener('click', async () => {
+					const name = nameInput.value.trim();
+					if (!name) {
+						new Notice('Please enter a name.');
+						return;
+					}
+					const trigger = triggerInput.value.trim();
+					if (!trigger) {
+						new Notice('Please enter a trigger description.');
+						return;
+					}
+					const isInline = (inlineInput as HTMLInputElement).checked;
+					const contentType = isInline ? 'inline' : 'note';
+
+					if (isInline && !inlineTextarea.value.trim()) {
+						new Notice('Please enter inline content.');
+						return;
+					}
+					if (!isInline && !notePathInput.value.trim()) {
+						new Notice('Please select a vault note.');
+						return;
+					}
+
+					const existingNames = (settingsTab.plugin.settings.customInfoTools || [])
+						.filter(t => !existingTool || t.id !== existingTool.id)
+						.map(t => t.toolName);
+
+					const toolName = existingTool && existingTool.name === name
+						? existingTool.toolName
+						: generateInfoToolName(name, existingNames);
+
+					const tool: CustomInfoTool = {
+						id: existingTool?.id || crypto.randomUUID(),
+						name,
+						toolName,
+						triggerDescription: trigger,
+						contentType: contentType as 'inline' | 'note',
+						inlineContent: isInline ? inlineTextarea.value : undefined,
+						notePath: !isInline ? notePathInput.value.trim() : undefined,
+						enabled: existingTool?.enabled ?? true
+					};
+
+					if (existingTool) {
+						const idx = settingsTab.plugin.settings.customInfoTools.findIndex(t => t.id === existingTool.id);
+						if (idx >= 0) settingsTab.plugin.settings.customInfoTools[idx] = tool;
+					} else {
+						settingsTab.plugin.settings.customInfoTools.push(tool);
+					}
+
+					await settingsTab.plugin.saveSettings();
+					settingsTab.renderCustomInfoTools(listContainer);
+					if (settingsTab.toolToggleWrapper) settingsTab.renderToolTogglePills(settingsTab.toolToggleWrapper);
+					this.close();
+				});
+
+				const cancelBtn = btnContainer.createEl('button', { text: 'Cancel' });
+				cancelBtn.addEventListener('click', () => this.close());
+
+				setTimeout(() => nameInput.focus(), 50);
+			}
+
+			onClose() {
+				this.contentEl.empty();
+			}
+		})(this.app);
 
 		modal.open();
 	}

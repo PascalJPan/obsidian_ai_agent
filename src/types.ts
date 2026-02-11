@@ -224,6 +224,50 @@ export interface WhitelistedCommand {
 	description: string;
 }
 
+export interface CustomInfoTool {
+	id: string;                  // UUID for stable identity
+	name: string;                // User-facing name, e.g. "Dataview Syntax"
+	toolName: string;            // Auto-generated, e.g. "info_dataview_syntax"
+	triggerDescription: string;  // AI sees this as the tool description
+	contentType: 'inline' | 'note';
+	inlineContent?: string;      // Content if inline
+	notePath?: string;           // Vault note path if note-based
+	enabled: boolean;            // Per-tool toggle
+}
+
+// Built-in tool names that custom info tools must not collide with
+const BUILTIN_TOOL_NAMES = new Set([
+	'search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure',
+	'list_tags', 'get_manual_context', 'get_properties', 'get_file_info',
+	'find_dead_links', 'query_notes', 'web_search', 'read_webpage',
+	'edit_note', 'create_note', 'open_note', 'move_note', 'update_properties',
+	'add_tags', 'link_notes', 'copy_notes', 'delete_note', 'execute_command',
+	'done', 'ask_user'
+]);
+
+/**
+ * Generate a safe tool name from a user-facing name.
+ * Prefix "info_" + sanitized lowercase (alphanumeric + underscores).
+ * Checks for collisions against built-in tools and existing custom tool names.
+ * Max 64 chars (OpenAI limit).
+ */
+export function generateInfoToolName(name: string, existingToolNames: string[]): string {
+	const sanitized = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '');
+	let toolName = `info_${sanitized}`.slice(0, 64);
+
+	const allExisting = new Set([...BUILTIN_TOOL_NAMES, ...existingToolNames]);
+	let suffix = 2;
+	let candidate = toolName;
+	while (allExisting.has(candidate)) {
+		candidate = `${toolName.slice(0, 60)}_${suffix}`;
+		suffix++;
+	}
+	return candidate;
+}
+
 export interface AgentConfig {
 	model: string;
 	apiKey: string;
@@ -239,6 +283,7 @@ export interface AgentConfig {
 	webTokenBudget?: number;
 	disabledTools: string[];        // Tool names disabled by user (e.g., ['list_tags', 'move_note'])
 	whitelistedCommands: WhitelistedCommand[];
+	customInfoTools: CustomInfoTool[];
 	customPrompts?: { character?: string };
 	chatHistoryLength: number;
 	debugMode: boolean;
@@ -261,7 +306,7 @@ export interface AgentCallbacks {
 	exploreStructure(action: string, args: Record<string, unknown>): Promise<string>;
 	listTags(): Promise<{ tag: string; count: number }[]>;
 	getAllNotes(includeMetadata?: boolean): Promise<{ path: string; aliases?: string[]; description?: string }[]>;
-	getManualContext(): Promise<string>;
+	getManualContext(summaryOnly?: boolean): Promise<string>;
 	// Web
 	webSearch?(query: string, limit: number): Promise<{ title: string; url: string; snippet: string }[]>;
 	fetchPage?(url: string, maxTokens: number): Promise<{ content: string; title: string }>;
@@ -285,6 +330,8 @@ export interface AgentCallbacks {
 	deleteNote?(path: string): Promise<{ success: boolean; error?: string }>;
 	executeCommand?(commandId: string): Promise<{ success: boolean; error?: string }>;
 	listCommands?(): Promise<CommandInfo[]>;
+	// Custom info tools
+	resolveCustomInfoTool?(toolName: string): Promise<string | null>;
 	// Meta
 	askUser(question: string, choices?: string[]): Promise<string>;
 	onProgress(event: AgentProgressEvent): void;

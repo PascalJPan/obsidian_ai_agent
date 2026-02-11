@@ -5,7 +5,7 @@
  * update_properties, add_tags, link_notes, copy_notes, done, ask_user
  */
 
-import { AgentCallbacks, AICapabilities, WebSource, WhitelistedCommand } from '../../types';
+import { AgentCallbacks, AICapabilities, CustomInfoTool, WebSource, WhitelistedCommand } from '../../types';
 import { OpenAITool } from './vaultTools';
 
 export const TOOL_EDIT_NOTE: OpenAITool = {
@@ -269,6 +269,23 @@ export function buildExecuteCommandTool(whitelistedCommands: WhitelistedCommand[
 			}
 		}
 	};
+}
+
+/**
+ * Build OpenAI tool definitions from enabled custom info tools.
+ * Each tool has zero parameters — the AI just calls it to receive the content.
+ */
+export function buildCustomInfoTools(tools: CustomInfoTool[]): OpenAITool[] {
+	return tools
+		.filter(t => t.enabled)
+		.map(t => ({
+			type: 'function' as const,
+			function: {
+				name: t.toolName,
+				description: t.triggerDescription,
+				parameters: { type: 'object', properties: {} }
+			}
+		}));
 }
 
 /**

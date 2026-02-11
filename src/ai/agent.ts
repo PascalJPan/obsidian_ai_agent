@@ -21,7 +21,7 @@ import {
 import { Logger } from '../utils/logger';
 import { getVaultTools, handleVaultToolCall, OpenAITool } from './tools/vaultTools';
 import { ALL_WEB_TOOLS, handleWebToolCall } from './tools/webTools';
-import { getActionTools, handleActionToolCall, ActionToolState } from './tools/actionTools';
+import { getActionTools, handleActionToolCall, ActionToolState, buildCustomInfoTools } from './tools/actionTools';
 import { buildAgentSystemPrompt, buildAgentInitialMessage, AGENT_FINAL_ROUND_WARNING, buildStuckWarning } from './prompts/agentPrompts';
 import { buildMessagesFromHistory } from './prompts/chatHistory';
 
@@ -64,10 +64,15 @@ export async function runAgent(
 	const filterTools = (tools: OpenAITool[]) =>
 		tools.filter(t => !disabledSet.has(t.function.name));
 
+	// Build custom info tools and track their names for dispatch routing
+	const customInfoToolDefs = buildCustomInfoTools(config.customInfoTools || []);
+	const customInfoToolNames = new Set(customInfoToolDefs.map(t => t.function.name));
+
 	const allTools: OpenAITool[] = [
 		...filterTools(getVaultTools()),
 		...(config.webEnabled ? filterTools(ALL_WEB_TOOLS) : []),
-		...filterTools(getActionTools(config.capabilities, config.whitelistedCommands))
+		...filterTools(getActionTools(config.capabilities, config.whitelistedCommands)),
+		...customInfoToolDefs
 	];
 
 	// State tracking
@@ -261,6 +266,14 @@ export async function runAgent(
 					// Track web sources
 					if (fnName === 'web_search') {
 						// Results are tracked implicitly in conversation
+					}
+				} else if (customInfoToolNames.has(fnName)) {
+					// Custom info tools
+					if (callbacks.resolveCustomInfoTool) {
+						const content = await callbacks.resolveCustomInfoTool(fnName);
+						toolResult = content ?? `Error: Could not resolve content for "${fnName}".`;
+					} else {
+						toolResult = `Error: Custom info tool "${fnName}" is not available.`;
 					}
 				} else {
 					// Action tools (edit, create, open, move, done, ask_user, delete, execute, etc.)
