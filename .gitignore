@@ -23,3 +23,13 @@ data.json
 
 # Generated embedding index
 embeddings.json
+
+# Claude Code local settings
+.claude/
+
+# NPM config (may contain tokens)
+.npmrc
+
+# Safety net for env files
+.env
+.env.*
