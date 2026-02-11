@@ -22,7 +22,7 @@ import { Logger } from '../utils/logger';
 import { getVaultTools, handleVaultToolCall, OpenAITool } from './tools/vaultTools';
 import { ALL_WEB_TOOLS, handleWebToolCall } from './tools/webTools';
 import { getActionTools, handleActionToolCall, ActionToolState, buildCustomInfoTools } from './tools/actionTools';
-import { buildAgentSystemPrompt, buildAgentInitialMessage, AGENT_FINAL_ROUND_WARNING, buildStuckWarning } from './prompts/agentPrompts';
+import { buildAgentSystemPrompt, buildAgentInitialMessage, buildFinalRoundWarning, buildStuckWarning } from './prompts/agentPrompts';
 import { buildMessagesFromHistory } from './prompts/chatHistory';
 
 /**
@@ -87,6 +87,7 @@ export async function runAgent(
 	let totalTokens = 0;
 	let totalPromptTokens = 0;
 	let totalCompletionTokens = 0;
+	let lastRoundTokens = 0;
 	let finished = false;
 	let summary = '';
 	const editsProposed: EditInstruction[] = [];
@@ -112,24 +113,30 @@ export async function runAgent(
 
 		// Determine tools for this iteration
 		const isLastIteration = iteration === config.maxIterations;
-		const isBudgetExceeded = totalTokens >= config.maxTotalTokens;
+		const isBudgetExceeded = lastRoundTokens >= config.maxTotalTokens;
 		const shouldFinalize = isLastIteration || isBudgetExceeded;
 
 		let currentTools: OpenAITool[];
+		const finalReason = isBudgetExceeded ? 'tokens' : isLastIteration ? 'iterations' : null;
 		if (shouldFinalize) {
 			currentTools = filterTools(getActionTools(config.capabilities, config.whitelistedCommands, 'finalization'));
-			// Inject warning
+			// Inject warning with reason
 			messages.push({
 				role: 'user',
-				content: AGENT_FINAL_ROUND_WARNING
+				content: buildFinalRoundWarning(finalReason as 'iterations' | 'tokens')
 			});
 		} else {
 			currentTools = allTools;
 		}
 
+		const finalLabel = finalReason === 'tokens'
+			? ' (FINAL — token budget)'
+			: finalReason === 'iterations'
+				? ' (FINAL — max iterations)'
+				: '';
 		callbacks.onProgress({
 			type: 'iteration',
-			message: `Round ${iteration}/${config.maxIterations}${shouldFinalize ? ' (FINAL)' : ''}`,
+			message: `Round ${iteration}/${config.maxIterations}${finalLabel}`,
 			detail: `${totalTokens.toLocaleString()} tokens used`
 		});
 
@@ -156,6 +163,7 @@ export async function runAgent(
 			totalCompletionTokens += data.usage?.completion_tokens ?? 0;
 			tokenPerRound.push(roundTokens);
 			totalTokens += roundTokens;
+			lastRoundTokens = roundTokens;
 
 			const choice = data.choices?.[0];
 			if (!choice) {
@@ -250,7 +258,7 @@ export async function runAgent(
 				// Route tool call to appropriate handler
 				let toolResult: string;
 
-				if (['search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure', 'list_tags', 'get_manual_context', 'get_properties', 'get_file_info', 'find_dead_links', 'query_notes'].includes(fnName)) {
+				if (['search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure', 'list_tags', 'get_manual_context', 'get_properties', 'get_file_info', 'find_dead_links', 'query_notes', 'get_vault_stats', 'get_chat_history'].includes(fnName)) {
 					// Vault tools
 					toolResult = await handleVaultToolCall(fnName, fnArgs, callbacks);
 					// Track read notes
@@ -297,6 +305,13 @@ export async function runAgent(
 						editsProposed.push({
 							file: fnArgs.path as string,
 							position: 'create',
+							content: fnArgs.content as string
+						});
+					}
+					if (fnName === 'append_to_note' && fnArgs.path) {
+						editsProposed.push({
+							file: fnArgs.path as string,
+							position: 'end',
 							content: fnArgs.content as string
 						});
 					}

@@ -6,7 +6,7 @@
  */
 
 import { AgentCallbacks, AICapabilities, CustomInfoTool, WebSource, WhitelistedCommand } from '../../types';
-import { OpenAITool } from './vaultTools';
+import { OpenAITool, normalizePathArgs } from './vaultTools';
 
 export const TOOL_EDIT_NOTE: OpenAITool = {
 	type: 'function',
@@ -78,20 +78,31 @@ export const TOOL_MOVE_NOTE: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'move_note',
-		description: 'Move/rename a note. All wikilinks in the vault are updated automatically.',
+		description: 'Move/rename one or more notes. Use from_path/to_path for a single note, or moves array for batch. All wikilinks updated automatically.',
 		parameters: {
 			type: 'object',
 			properties: {
 				from_path: {
 					type: 'string',
-					description: 'Current path of the note'
+					description: 'Current path of the note (single move)'
 				},
 				to_path: {
 					type: 'string',
-					description: 'New path for the note (e.g., "Archive/Old Note.md")'
+					description: 'New path for the note (single move)'
+				},
+				moves: {
+					type: 'array',
+					description: 'Batch move: array of {from_path, to_path} objects',
+					items: {
+						type: 'object',
+						properties: {
+							from_path: { type: 'string', description: 'Current path' },
+							to_path: { type: 'string', description: 'New path' }
+						},
+						required: ['from_path', 'to_path']
+					}
 				}
-			},
-			required: ['from_path', 'to_path']
+			}
 		}
 	}
 };
@@ -182,6 +193,59 @@ export const TOOL_COPY_NOTES: OpenAITool = {
 				}
 			},
 			required: ['paths']
+		}
+	}
+};
+
+export const TOOL_APPEND_TO_NOTE: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'append_to_note',
+		description: 'Append content to the end of a note. No need to read the note first. Creates a pending edit the user can accept/reject.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {
+					type: 'string',
+					description: 'Path or name of the note (e.g., "Projects/Log.md" or "Log")'
+				},
+				content: {
+					type: 'string',
+					description: 'Content to append at the end of the note'
+				}
+			},
+			required: ['path', 'content']
+		}
+	}
+};
+
+export const TOOL_SEARCH_AND_REPLACE: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'search_and_replace',
+		description: 'Find and replace text across notes. Each replacement creates a pending edit. Max 50 replacements per call.',
+		parameters: {
+			type: 'object',
+			properties: {
+				search: {
+					type: 'string',
+					description: 'Text or regex pattern to search for'
+				},
+				replace: {
+					type: 'string',
+					description: 'Replacement text'
+				},
+				paths: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Optional: limit to specific note paths. If omitted, searches all editable notes.'
+				},
+				regex: {
+					type: 'boolean',
+					description: 'If true, treat search as a regular expression (default: false)'
+				}
+			},
+			required: ['search', 'replace']
 		}
 	}
 };
@@ -303,6 +367,12 @@ export function getActionTools(
 	if (capabilities.canAdd || capabilities.canDelete) {
 		tools.push(TOOL_EDIT_NOTE);
 	}
+	if (capabilities.canAdd) {
+		tools.push(TOOL_APPEND_TO_NOTE);
+	}
+	if (capabilities.canDelete) {
+		tools.push(TOOL_SEARCH_AND_REPLACE);
+	}
 	tools.push(TOOL_CREATE_NOTE);
 	tools.push(TOOL_OPEN_NOTE);
 	if (capabilities.canAdd || capabilities.canDelete) {
@@ -337,11 +407,12 @@ export interface ActionToolState {
  */
 export async function handleActionToolCall(
 	name: string,
-	args: Record<string, unknown>,
+	rawArgs: Record<string, unknown>,
 	callbacks: AgentCallbacks,
 	state: ActionToolState,
 	whitelistedCommands?: WhitelistedCommand[]
 ): Promise<{ result: string; done?: boolean }> {
+	const args = normalizePathArgs(rawArgs);
 	switch (name) {
 		case 'edit_note': {
 			const edit = {
@@ -381,14 +452,36 @@ export async function handleActionToolCall(
 		}
 
 		case 'move_note': {
-			const fromPath = args.from_path as string;
-			const toPath = args.to_path as string;
-			const result = await callbacks.moveNote(fromPath, toPath);
-			if (result.success) {
-				return { result: `Moved "${fromPath}" → "${result.newPath || toPath}". All wikilinks updated.` };
-			} else {
-				return { result: `Failed to move note: ${result.error}` };
+			const movesArg = args.moves as Array<{ from_path: string; to_path: string }> | undefined;
+			const moveList: Array<{ from_path: string; to_path: string }> = movesArg && movesArg.length > 0
+				? movesArg
+				: [{ from_path: args.from_path as string, to_path: args.to_path as string }];
+
+			if (moveList.length === 1) {
+				const { from_path, to_path } = moveList[0];
+				const result = await callbacks.moveNote(from_path, to_path);
+				if (result.success) {
+					return { result: `Moved "${from_path}" → "${result.newPath || to_path}". All wikilinks updated.` };
+				} else {
+					return { result: `Failed to move note: ${result.error}` };
+				}
 			}
+
+			const successes: string[] = [];
+			const failures: string[] = [];
+			for (const move of moveList) {
+				const result = await callbacks.moveNote(move.from_path, move.to_path);
+				if (result.success) {
+					successes.push(`"${move.from_path}" → "${result.newPath || move.to_path}"`);
+				} else {
+					failures.push(`"${move.from_path}": ${result.error}`);
+				}
+			}
+			const parts: string[] = [];
+			parts.push(`Moved ${successes.length}/${moveList.length} notes.`);
+			if (successes.length > 0) parts.push('Succeeded:\n' + successes.map(s => `  ${s}`).join('\n'));
+			if (failures.length > 0) parts.push('Failed:\n' + failures.map(f => `  ${f}`).join('\n'));
+			return { result: parts.join('\n') };
 		}
 
 		case 'update_properties': {
@@ -462,6 +555,34 @@ export async function handleActionToolCall(
 			}
 		}
 
+		case 'append_to_note': {
+			const path = args.path as string;
+			const content = args.content as string;
+			const edit = { file: path, position: 'end', content };
+			const result = await callbacks.proposeEdit(edit);
+			if (result.success) {
+				state.editsProposed++;
+				return { result: `Appended content to "${path}". The user will see a pending edit block to accept/reject.` };
+			} else {
+				return { result: `Append failed: ${result.error}` };
+			}
+		}
+
+		case 'search_and_replace': {
+			const search = args.search as string;
+			const replace = args.replace as string;
+			const paths = args.paths as string[] | undefined;
+			const useRegex = !!args.regex;
+			if (!callbacks.searchAndReplace) return { result: 'Error: search_and_replace is not available.' };
+			const result = await callbacks.searchAndReplace(search, replace, paths, useRegex);
+			state.editsProposed += result.matchCount;
+			let msg = `Replaced ${result.matchCount} occurrence(s) across ${result.fileCount} file(s). Each replacement is a pending edit.`;
+			if (result.errors.length > 0) {
+				msg += ` Errors: ${result.errors.join('; ')}`;
+			}
+			return { result: msg };
+		}
+
 		case 'done': {
 			const summary = args.summary as string;
 			return { result: summary, done: true };
@@ -470,7 +591,13 @@ export async function handleActionToolCall(
 		case 'ask_user': {
 			const question = args.question as string;
 			const choices = args.choices as string[] | undefined;
-			const userAnswer = await callbacks.askUser(question, choices);
+			const ASK_USER_TIMEOUT_MS = 120_000;
+			const userAnswer = await Promise.race([
+				callbacks.askUser(question, choices),
+				new Promise<string>(resolve =>
+					setTimeout(() => resolve('[User did not respond within 2 minutes]'), ASK_USER_TIMEOUT_MS)
+				)
+			]);
 			return { result: `User answered: "${userAnswer}"` };
 		}
 

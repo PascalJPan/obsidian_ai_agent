@@ -69,10 +69,8 @@ export function buildScopeInstruction(editableScope: EditableScope): string {
 	let scopeText = '';
 	if (editableScope === 'current') {
 		scopeText = 'You may ONLY edit the currently open note. Edits to other notes will be rejected.';
-	} else if (editableScope === 'linked') {
-		scopeText = 'You may edit the current note and notes directly linked to/from it.';
 	} else {
-		scopeText = 'You may edit the current note and notes in the user\'s configured context. Notes discovered via search may be outside editable scope — if an edit is rejected, inform the user.';
+		scopeText = 'You may edit any note in the vault. There are no scope restrictions.';
 	}
 	return `SCOPE RULE: ${scopeText}`;
 }

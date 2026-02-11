@@ -112,7 +112,7 @@ interface MyPluginSettings {
 	defaultSemanticMatchCount: number;     // 0-20, default 0
 	defaultSemanticMinSimilarity: number;  // 0-100, default 50
 	// Default edit rules
-	defaultEditableScope: EditableScope;   // 'current' | 'linked' | 'context'
+	defaultEditableScope: EditableScope;   // 'current' | 'vault'
 	defaultCanAdd: boolean;
 	defaultCanDelete: boolean;
 	disabledTools: string[];               // Agent tool names disabled by user (includes advanced tools)
@@ -154,7 +154,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	defaultSemanticMatchCount: 0,
 	defaultSemanticMinSimilarity: 50,
 	// Default edit rules - all capabilities enabled, context scope
-	defaultEditableScope: 'context',
+	defaultEditableScope: 'vault',
 	defaultCanAdd: true,
 	defaultCanDelete: true,
 	disabledTools: ['delete_note', 'execute_command'],
@@ -175,7 +175,6 @@ export default class MyPlugin extends Plugin {
 	editManager: EditManager;
 
 	// Cache of semantic file paths from most recent context build
-	// Used by getEditableFilesWithConfig() when editableScope === 'context'
 	lastSemanticFilePaths: Set<string> = new Set();
 
 	// Backlink cache for O(1) lookups instead of O(n) iteration
@@ -395,6 +394,11 @@ export default class MyPlugin extends Plugin {
 		}
 
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+
+		// Migrate old editable scope values to new options
+		if (this.settings.defaultEditableScope !== 'current' && this.settings.defaultEditableScope !== 'vault') {
+			this.settings.defaultEditableScope = 'vault';
+		}
 	}
 
 	async saveSettings() {
@@ -1371,7 +1375,7 @@ export default class MyPlugin extends Plugin {
 			// 1. CHECK EDITABLE SCOPE
 			const targetPath = edit.resolvedFile?.path || edit.instruction.file;
 			if (!allowedFiles.has(targetPath) && !edit.isNewFile) {
-				edit.error = `File "${edit.instruction.file}" is outside editable scope (${editableScope})`;
+				edit.error = `File "${edit.instruction.file}" is outside editable scope (mode: ${editableScope}). Only the currently open note can be edited. The user can change this in Settings → Editable Scope.`;
 				rejectedEdits.push({ file: edit.instruction.file, reason: 'outside editable scope' });
 				continue;
 			}
@@ -1381,14 +1385,14 @@ export default class MyPlugin extends Plugin {
 
 			// Check canCreate
 			if (edit.isNewFile && !capabilities.canCreate) {
-				edit.error = 'Creating new files is not allowed (capability disabled)';
+				edit.error = 'Creating new files is not allowed. The user can enable "Can Create" in Settings → Edit Rules.';
 				rejectedEdits.push({ file: edit.instruction.file, reason: 'canCreate disabled' });
 				continue;
 			}
 
 			// Check canDelete
 			if ((position.startsWith('delete:') || position.startsWith('replace:')) && !capabilities.canDelete) {
-				edit.error = 'Deleting/replacing content is not allowed (capability disabled)';
+				edit.error = 'Deleting/replacing content is not allowed. Only additive edits (insert, append) are permitted. The user can enable "Can Delete" in Settings → Edit Rules.';
 				rejectedEdits.push({ file: edit.instruction.file, reason: 'canDelete disabled' });
 				continue;
 			}
@@ -1396,14 +1400,14 @@ export default class MyPlugin extends Plugin {
 			// Check canAdd
 			if ((position === 'start' || position === 'end' ||
 				position.startsWith('after:') || position.startsWith('insert:')) && !capabilities.canAdd) {
-				edit.error = 'Adding content is not allowed (capability disabled)';
+				edit.error = 'Adding/inserting content is not allowed. Only replacements and deletions are permitted. The user can enable "Can Add" in Settings → Edit Rules.';
 				rejectedEdits.push({ file: edit.instruction.file, reason: 'canAdd disabled' });
 				continue;
 			}
 
 			// Check canNavigate
 			if (position === 'open' && !capabilities.canNavigate) {
-				edit.error = 'Opening notes is not allowed (canNavigate disabled)';
+				edit.error = 'Opening notes in new tabs is not allowed. The user can enable "Can Navigate" in Settings → Edit Rules.';
 				rejectedEdits.push({ file: edit.instruction.file, reason: 'canNavigate disabled' });
 				continue;
 			}
@@ -1429,52 +1433,11 @@ export default class MyPlugin extends Plugin {
 			return allowed; // Only current file
 		}
 
-		if (editableScope === 'linked') {
-			// Add directly linked files (depth 1 only)
-			const linkedFiles = this.getLinkedFilesBFS(currentFile, 1);
-			for (const path of linkedFiles) {
-				allowed.add(path);
-			}
-			return allowed;
-		}
-
-		// editableScope === 'context' - all context files are editable
-		// Add files based on link depth (maxLinkedNotes 0 = none)
-		if (scopeConfig.linkDepth > 0 && scopeConfig.maxLinkedNotes > 0) {
-			const linkedFiles = this.getLinkedFilesBFS(currentFile, scopeConfig.linkDepth);
-			const limitedLinked = [...linkedFiles].slice(0, scopeConfig.maxLinkedNotes);
-			for (const path of limitedLinked) {
-				allowed.add(path);
-			}
-		}
-
-		// Add folder files if included in context (maxFolderNotes > 0)
-		if (scopeConfig.maxFolderNotes > 0) {
-			const folderFiles = this.getSameFolderFiles(currentFile);
-			const limitedFolder = [...folderFiles].slice(0, scopeConfig.maxFolderNotes);
-			for (const path of limitedFolder) {
-				allowed.add(path);
-			}
-		}
-
-		// Add semantic files if included in context (read from cache populated by buildContextWithScopeConfig)
-		if (scopeConfig.semanticMatchCount > 0 && this.lastSemanticFilePaths.size > 0) {
-			for (const path of this.lastSemanticFilePaths) {
-				allowed.add(path);
-			}
-		}
-
-		// Add manually added notes
-		if (scopeConfig.manuallyAddedNotes && scopeConfig.manuallyAddedNotes.length > 0) {
-			for (const path of scopeConfig.manuallyAddedNotes) {
-				allowed.add(path);
-			}
-		}
-
-		// Add agent-selected paths
-		if (scoutSelectedPaths && scoutSelectedPaths.length > 0) {
-			for (const path of scoutSelectedPaths) {
-				allowed.add(path);
+		// editableScope === 'vault' — all markdown files are editable
+		const files = this.app.vault.getMarkdownFiles();
+		for (const f of files) {
+			if (!this.isPathExcluded(f.path)) {
+				allowed.add(f.path);
 			}
 		}
 
@@ -1497,7 +1460,7 @@ class AIAssistantView extends ItemView {
 		semanticMinSimilarity: 50
 	};
 	// Edit rules - initialized from settings in onOpen
-	editableScope: EditableScope = 'context';
+	editableScope: EditableScope = 'vault';
 	capabilities: AICapabilities = {
 		canAdd: true,
 		canDelete: true,
@@ -2593,6 +2556,11 @@ class AIAssistantView extends ItemView {
 
 	// Run the unified agent loop
 	private async runAgentLoop(userMessage: string, file: TFile | null) {
+		// Ensure metadata cache is ready (important on Obsidian startup)
+		if (!this.app.workspace.layoutReady) {
+			await new Promise<void>(resolve => this.app.workspace.onLayoutReady(() => resolve()));
+		}
+
 		// Create abort controller for cancellation
 		this.agentAbortController = new AbortController();
 		if (this.stopButton) this.stopButton.style.display = '';
@@ -2780,19 +2748,29 @@ class AIAssistantView extends ItemView {
 				}
 			},
 
-			async listNotes(folder?: string, limit?: number): Promise<NotePreview[]> {
+			async listNotes(folder?: string, limit?: number, previewLength?: number): Promise<NotePreview[]> {
 				const files = app.vault.getMarkdownFiles();
-				const maxResults = limit || 30;
+				const maxResults = limit || 200;
 				const results: NotePreview[] = [];
+				const pLen = previewLength || 0;
 
 				for (const file of files) {
 					if (results.length >= maxResults) break;
 					if (plugin.isPathExcluded(file.path)) continue;
-					if (folder && !file.path.startsWith(folder.endsWith('/') ? folder : folder + '/')) continue;
+					if (folder !== undefined) {
+						if (folder === '' || folder === '/') {
+							if (file.path.includes('/')) continue;
+						} else {
+							if (!file.path.startsWith(folder.endsWith('/') ? folder : folder + '/')) continue;
+						}
+					}
 
 					const cache = app.metadataCache.getFileCache(file);
-					const content = await app.vault.cachedRead(file);
-					const preview = content.substring(0, 200).trim();
+					let preview = '';
+					if (pLen > 0) {
+						const content = await app.vault.cachedRead(file);
+						preview = content.substring(0, pLen).trim();
+					}
 
 					results.push({
 						path: file.path,
@@ -3424,6 +3402,156 @@ class AIAssistantView extends ItemView {
 				return commands.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }));
 			},
 
+			async getVaultStats(): Promise<string> {
+				const files = app.vault.getMarkdownFiles();
+				const folders = new Set<string>();
+				const tagCounts = new Map<string, number>();
+				let totalSize = 0;
+				let sampledLength = 0;
+				let sampledCount = 0;
+				const sampleLimit = 200;
+
+				for (const f of files) {
+					if (f.parent) folders.add(f.parent.path);
+					totalSize += f.stat.size;
+
+					// Tag extraction from metadata cache
+					const cache = app.metadataCache.getFileCache(f);
+					if (cache?.frontmatter?.tags) {
+						const tags = cache.frontmatter.tags;
+						const tagList = Array.isArray(tags) ? tags : [tags];
+						for (const t of tagList) {
+							const clean = String(t).replace(/^#/, '');
+							tagCounts.set(clean, (tagCounts.get(clean) || 0) + 1);
+						}
+					}
+					if (cache?.tags) {
+						for (const t of cache.tags) {
+							const clean = t.tag.replace(/^#/, '');
+							tagCounts.set(clean, (tagCounts.get(clean) || 0) + 1);
+						}
+					}
+
+					// Sample for average length
+					if (sampledCount < sampleLimit) {
+						sampledLength += f.stat.size;
+						sampledCount++;
+					}
+				}
+
+				// Top 15 tags
+				const topTags = [...tagCounts.entries()]
+					.sort((a, b) => b[1] - a[1])
+					.slice(0, 15)
+					.map(([tag, count]) => `${tag} (${count})`)
+					.join(', ');
+
+				// 10 most recently modified
+				const recent = [...files]
+					.sort((a, b) => b.stat.mtime - a.stat.mtime)
+					.slice(0, 10)
+					.map(f => `- ${f.path} (${new Date(f.stat.mtime).toISOString().split('T')[0]})`)
+					.join('\n');
+
+				const avgLength = sampledCount > 0 ? Math.round(sampledLength / sampledCount / 1024 * 10) / 10 : 0;
+				const totalMB = Math.round(totalSize / 1024 / 1024 * 100) / 100;
+
+				return `VAULT OVERVIEW
+Total notes: ${files.length}
+Total folders: ${folders.size}
+Total tags: ${tagCounts.size}
+Total size: ${totalMB} MB
+Avg note size: ${avgLength} KB (sampled ${sampledCount} notes)
+
+TOP TAGS: ${topTags || 'none'}
+
+RECENTLY MODIFIED:
+${recent || 'none'}`;
+			},
+
+			async searchAndReplace(search: string, replace: string, paths?: string[], useRegex?: boolean) {
+				const MAX_REPLACEMENTS = 50;
+				let matchCount = 0;
+				const filesMatched = new Set<string>();
+				const errors: string[] = [];
+
+				// Determine target files
+				let targetFiles: TFile[];
+				if (paths && paths.length > 0) {
+					targetFiles = [];
+					for (const p of paths) {
+						const f = findNoteByAnyName(p);
+						if (f) targetFiles.push(f);
+						else errors.push(`Note not found: "${p}"`);
+					}
+				} else {
+					// Use all editable files based on current scope
+					const activeFile = app.workspace.getActiveFile();
+					if (!activeFile) {
+						return { matchCount: 0, fileCount: 0, errors: ['No active file — cannot determine editable scope'] };
+					}
+					const editableSet = plugin.getEditableFilesWithConfig(activeFile, view.editableScope, view.contextScopeConfig);
+					targetFiles = app.vault.getMarkdownFiles().filter(f => editableSet.has(f.path));
+				}
+
+				// Build regex
+				let pattern: RegExp;
+				try {
+					pattern = useRegex ? new RegExp(search, 'g') : new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+				} catch (e) {
+					return { matchCount: 0, fileCount: 0, errors: [`Invalid regex: ${(e as Error).message}`] };
+				}
+
+				for (const file of targetFiles) {
+					if (matchCount >= MAX_REPLACEMENTS) break;
+					if (plugin.isPathExcluded(file.path)) continue;
+
+					try {
+						const raw = await app.vault.cachedRead(file);
+						const content = stripPendingEditBlocks(raw, plugin.settings.pendingEditTag);
+						const lines = content.split('\n');
+
+						for (let i = 0; i < lines.length; i++) {
+							if (matchCount >= MAX_REPLACEMENTS) break;
+							pattern.lastIndex = 0;
+							if (pattern.test(lines[i])) {
+								pattern.lastIndex = 0;
+								const newLine = lines[i].replace(pattern, replace);
+								const lineNum = i + 1;
+								const edit: EditInstruction = {
+									file: file.path,
+									position: `replace:${lineNum}`,
+									content: newLine
+								};
+								// Inline proposeEdit logic: validate, filter, insert
+								const validated = await plugin.validateEdits([edit]);
+								if (validated[0]?.error) {
+									errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
+									continue;
+								}
+								const activeFile = app.workspace.getActiveFile();
+								if (activeFile) {
+									plugin.filterEditsByRulesWithConfig(validated, activeFile, view.editableScope, view.capabilities, view.contextScopeConfig);
+								}
+								if (validated[0]?.error) {
+									errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
+									continue;
+								}
+								const result = await plugin.insertEditBlocks(validated);
+								if (result.success > 0) {
+									matchCount++;
+									filesMatched.add(file.path);
+								}
+							}
+						}
+					} catch (e) {
+						errors.push(`Error reading ${file.path}: ${(e as Error).message}`);
+					}
+				}
+
+				return { matchCount, fileCount: filesMatched.size, errors };
+			},
+
 			async resolveCustomInfoTool(toolName: string): Promise<string | null> {
 				const tool = (plugin.settings.customInfoTools || []).find(t => t.toolName === toolName && t.enabled);
 				if (!tool) return null;
@@ -3440,9 +3568,36 @@ class AIAssistantView extends ItemView {
 				return null;
 			},
 
+			async getChatHistory(offset: number, count: number) {
+				const allMessages = view.chatMessages;
+				// Exclude the current (last) message — it's the active request
+				const historyPool = allMessages.slice(0, -1);
+				const totalAvailable = historyPool.length;
+				// Return messages newest-first, paged by offset/count
+				const start = Math.max(0, historyPool.length - offset - count);
+				const end = Math.max(0, historyPool.length - offset);
+				const slice = historyPool.slice(start, end).reverse();
+				return { messages: slice, totalAvailable };
+			},
+
 			async askUser(question: string, choices?: string[]) {
 				return new Promise<string>((resolve) => {
-					view.showUserClarificationUI({ question, options: choices }, resolve);
+					// If agent is already cancelled, resolve immediately
+					if (view.agentAbortController?.signal.aborted) {
+						resolve('[Agent cancelled]');
+						return;
+					}
+					// Listen for abort to clean up UI and resolve
+					const onAbort = () => {
+						view.hideClarificationUI();
+						resolve('[Agent cancelled]');
+					};
+					view.agentAbortController?.signal.addEventListener('abort', onAbort, { once: true });
+
+					view.showUserClarificationUI({ question, options: choices }, (answer: string) => {
+						view.agentAbortController?.signal.removeEventListener('abort', onAbort);
+						resolve(answer);
+					});
 				});
 			},
 
@@ -4222,9 +4377,8 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			.setName('Editable Scope')
 			.setDesc('Which notes the AI can edit')
 			.addDropdown(dropdown => dropdown
+				.addOption('vault', 'Whole vault')
 				.addOption('current', 'Current note only')
-				.addOption('linked', 'Linked notes only')
-				.addOption('context', 'All context notes')
 				.setValue(this.plugin.settings.defaultEditableScope)
 				.onChange(async (value) => {
 					this.plugin.settings.defaultEditableScope = value as EditableScope;

@@ -40,7 +40,7 @@ export {
 export {
 	buildAgentSystemPrompt,
 	buildAgentInitialMessage,
-	AGENT_FINAL_ROUND_WARNING,
+	buildFinalRoundWarning,
 	buildStuckWarning
 } from './agentPrompts';
 

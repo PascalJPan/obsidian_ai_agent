@@ -5,7 +5,7 @@
 import { TFile } from 'obsidian';
 
 // Type definitions
-export type EditableScope = 'current' | 'linked' | 'context';
+export type EditableScope = 'current' | 'vault';
 
 // Context scope configuration
 export type LinkDepth = 0 | 1 | 2 | 3;
@@ -239,9 +239,11 @@ export interface CustomInfoTool {
 const BUILTIN_TOOL_NAMES = new Set([
 	'search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure',
 	'list_tags', 'get_manual_context', 'get_properties', 'get_file_info',
-	'find_dead_links', 'query_notes', 'web_search', 'read_webpage',
+	'find_dead_links', 'query_notes', 'get_vault_stats', 'get_chat_history',
+	'web_search', 'read_webpage',
 	'edit_note', 'create_note', 'open_note', 'move_note', 'update_properties',
 	'add_tags', 'link_notes', 'copy_notes', 'delete_note', 'execute_command',
+	'append_to_note', 'search_and_replace',
 	'done', 'ask_user'
 ]);
 
@@ -301,7 +303,7 @@ export interface AgentCallbacks {
 	readNote(path: string): Promise<{ content: string; path: string; lineCount: number; excluded?: boolean } | null>;
 	searchKeyword(query: string, limit: number): Promise<KeywordResult[]>;
 	searchSemantic(query: string, topK: number): Promise<SemanticSearchResult[]>;
-	listNotes(folder?: string, limit?: number): Promise<NotePreview[]>;
+	listNotes(folder?: string, limit?: number, previewLength?: number): Promise<NotePreview[]>;
 	getLinks(path: string, direction: string, depth?: number): Promise<LinkInfo[]>;
 	exploreStructure(action: string, args: Record<string, unknown>): Promise<string>;
 	listTags(): Promise<{ tag: string; count: number }[]>;
@@ -330,6 +332,12 @@ export interface AgentCallbacks {
 	deleteNote?(path: string): Promise<{ success: boolean; error?: string }>;
 	executeCommand?(commandId: string): Promise<{ success: boolean; error?: string }>;
 	listCommands?(): Promise<CommandInfo[]>;
+	// Vault stats
+	getVaultStats?(): Promise<string>;
+	// Chat history retrieval (lazy loading of older messages)
+	getChatHistory?(offset: number, count: number): Promise<{ messages: ChatMessage[]; totalAvailable: number }>;
+	// Search and replace
+	searchAndReplace?(search: string, replace: string, paths?: string[], useRegex?: boolean): Promise<{ matchCount: number; fileCount: number; errors: string[] }>;
 	// Custom info tools
 	resolveCustomInfoTool?(toolName: string): Promise<string | null>;
 	// Meta
