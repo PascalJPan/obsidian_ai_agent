@@ -96,6 +96,7 @@ export interface TokenUsage {
 	promptTokens: number;
 	completionTokens: number;
 	totalTokens: number;
+	cachedTokens: number;  // prompt tokens served from OpenAI cache (charged at 50% input rate)
 }
 
 // Inline edit data structure
@@ -213,6 +214,26 @@ export interface FileInfo {
 	size: number;
 }
 
+export interface NoteStats {
+	path: string;
+	wordCount: number;
+	charCount: number;
+	lineCount: number;
+	headingCount: number;
+	headingsByLevel: Record<string, number>;  // h1-h6
+	paragraphCount: number;
+	codeBlockCount: number;
+	readingTimeMinutes: number;
+}
+
+export interface NoteConnections {
+	path: string;
+	tags: { count: number; list: string[] };
+	outgoingLinks: { count: number; list: string[] };
+	backlinks: { count: number; list: string[] };
+	embeds: { count: number; list: string[] };
+}
+
 export interface CommandInfo {
 	id: string;
 	name: string;
@@ -240,6 +261,8 @@ const BUILTIN_TOOL_NAMES = new Set([
 	'search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure',
 	'list_tags', 'get_manual_context', 'get_properties', 'get_file_info',
 	'find_dead_links', 'query_notes', 'get_vault_stats', 'get_chat_history',
+	'get_note_stats', 'get_note_connections', 'get_selection',
+	'preview_pending_edits', 'find_orphan_notes', 'find_unlinked_mentions',
 	'web_search', 'read_webpage',
 	'edit_note', 'create_note', 'open_note', 'move_note', 'update_properties',
 	'add_tags', 'link_notes', 'copy_notes', 'delete_note', 'execute_command',
@@ -296,6 +319,7 @@ export interface KeywordResult {
 	name: string;
 	matchType: 'title' | 'heading' | 'content';
 	matchContext: string;
+	lineNumber?: number;
 }
 
 export interface AgentCallbacks {
@@ -329,11 +353,21 @@ export interface AgentCallbacks {
 	findDeadLinks?(path?: string): Promise<DeadLinkResult[]>;
 	queryNotes?(filter: Record<string, unknown>, options: QueryOptions): Promise<QueryResult[]>;
 	// Destructive actions (optional — controlled by tool toggles)
-	deleteNote?(path: string): Promise<{ success: boolean; error?: string }>;
+	deleteNote?(path: string): Promise<{ success: boolean; error?: string; pending?: boolean }>;
 	executeCommand?(commandId: string): Promise<{ success: boolean; error?: string }>;
 	listCommands?(): Promise<CommandInfo[]>;
 	// Vault stats
 	getVaultStats?(): Promise<string>;
+	// Per-note stats and connections
+	getNoteStats?(paths: string[]): Promise<(NoteStats | { path: string; error: string })[]>;
+	getNoteConnections?(paths: string[]): Promise<(NoteConnections | { path: string; error: string })[]>;
+	// Editor selection
+	getSelection?(): Promise<{ text: string; file: string; startLine: number; endLine: number } | null>;
+	// Pending edits preview
+	previewPendingEdits?(path?: string): Promise<string>;
+	// Graph analysis
+	findOrphanNotes?(): Promise<string[]>;
+	findUnlinkedMentions?(noteName: string, targetPath?: string): Promise<{ file: string; line: number; context: string }[]>;
 	// Chat history retrieval (lazy loading of older messages)
 	getChatHistory?(offset: number, count: number): Promise<{ messages: ChatMessage[]; totalAvailable: number }>;
 	// Search and replace
@@ -359,7 +393,7 @@ export interface AgentResult {
 	notesRead: string[];           // for copy-notes feature
 	notesCopied: string[];         // paths of notes collected via copy_notes tool
 	webSourcesUsed: WebSource[];
-	tokenUsage: { total: number; promptTokens: number; completionTokens: number; perRound: number[] };
+	tokenUsage: { total: number; promptTokens: number; completionTokens: number; cachedTokens: number; perRound: number[] };
 	iterationsUsed: number;
 	error?: string;
 }

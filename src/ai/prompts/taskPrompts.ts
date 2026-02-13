@@ -107,7 +107,7 @@ export function buildEditRules(): string {
 1. Use exact filenames with .md extension.
 2. **YAML frontmatter**: Always replace as a single block with "replace:1-N" (N = closing --- line). Never edit individual YAML lines. To add frontmatter, use "start" with --- delimiters.
 3. Line numbers shown as "N: content" — use N before the colon (1-indexed).
-4. **Wikilinks**: Use [[Note Name]] (no .md). Only link notes you know exist. Use #tags for categorization, [[links]] for connections.
+4. **Wikilinks**: Use [[Note Name]] — just the name, no folder paths, no .md extension. Obsidian resolves links by name automatically. Never write [[Folder/Note]] or [[Folder/Note|Note]]. Only link notes you know exist.
 5. **Pending edits**: \`\`\`ai-edit blocks are your previous pending edits. To modify, replace the entire block with "replace:N-M".
 6. Multi-file edits: Use line numbers as shown — the system handles ordering.
 `;

@@ -31,7 +31,10 @@ export function calculateCost(usage: TokenUsage, model: string, overrides?: Reco
 		return 0;
 	}
 
-	const inputCost = (usage.promptTokens / 1_000_000) * pricing.input;
+	const cached = usage.cachedTokens ?? 0;
+	const uncached = usage.promptTokens - cached;
+	const inputCost = ((uncached / 1_000_000) * pricing.input)
+		+ ((cached / 1_000_000) * pricing.input * 0.5);
 	const outputCost = (usage.completionTokens / 1_000_000) * pricing.output;
 
 	return inputCost + outputCost;
@@ -45,7 +48,11 @@ export function calculateCost(usage: TokenUsage, model: string, overrides?: Reco
  */
 export function formatTokenUsage(usage: TokenUsage, model: string, overrides?: Record<string, { input: number; output: number }>): string {
 	const pricing = overrides?.[model] ?? MODEL_PRICING[model];
-	const tokenStr = `${usage.promptTokens.toLocaleString()} in + ${usage.completionTokens.toLocaleString()} out`;
+	const cached = usage.cachedTokens ?? 0;
+	const inLabel = cached > 0
+		? `${usage.promptTokens.toLocaleString()} in (${cached.toLocaleString()} cached)`
+		: `${usage.promptTokens.toLocaleString()} in`;
+	const tokenStr = `${inLabel} + ${usage.completionTokens.toLocaleString()} out`;
 
 	if (!pricing) {
 		return tokenStr;

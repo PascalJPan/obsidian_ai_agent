@@ -14,7 +14,7 @@
  */
 
 
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, ItemView, WorkspaceLeaf, MarkdownPostProcessorContext, MarkdownRenderer, setIcon } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, ItemView, WorkspaceLeaf, MarkdownPostProcessorContext, MarkdownRenderer, setIcon, MarkdownView } from 'obsidian';
 
 // Import extracted modules
 import {
@@ -78,6 +78,7 @@ import {
 } from './src/modals';
 import { EditManager } from './src/edits/editManager';
 import { DEFAULT_DATAVIEW_TOOL } from './src/defaults/dataviewReference';
+import { DEFAULT_CUSTOM_INSTRUCTIONS } from './src/defaults/defaultInstructions';
 
 // View type constant
 const AI_ASSISTANT_VIEW_TYPE = 'ai-assistant-view';
@@ -130,7 +131,7 @@ interface MyPluginSettings {
 const DEFAULT_SETTINGS: MyPluginSettings = {
 	openaiApiKey: '',
 	aiModel: 'gpt-5-mini',
-	customInstructions: '',
+	customInstructions: DEFAULT_CUSTOM_INSTRUCTIONS,
 	pendingEditTag: '#ai_edit',
 	excludedFolders: [],
 	excludedTag: 'private',
@@ -215,7 +216,7 @@ export default class MyPlugin extends Plugin {
 		// Load embedding index
 		this.embeddingIndex = await loadEmbeddingIndex(
 			this.app.vault,
-			'.obsidian/plugins/obsidian-agent',
+			this.manifest.dir!,
 			this.logger
 		);
 
@@ -498,7 +499,7 @@ export default class MyPlugin extends Plugin {
 			});
 
 		} catch (e) {
-			console.error('Failed to parse ai-edit block:', e);
+			this.logger.error('PARSE', 'Failed to parse ai-edit block', e);
 			el.createDiv({ cls: 'ai-edit-error', text: 'Invalid edit block' });
 		}
 	}
@@ -531,7 +532,7 @@ export default class MyPlugin extends Plugin {
 			});
 
 		} catch (e) {
-			console.error('Failed to parse ai-new-note block:', e);
+			this.logger.error('PARSE', 'Failed to parse ai-new-note block', e);
 			el.createDiv({ cls: 'ai-edit-error', text: 'Invalid new note block' });
 		}
 	}
@@ -1315,7 +1316,9 @@ export default class MyPlugin extends Plugin {
 			}
 
 			try {
-				validatedEdit.currentContent = await this.app.vault.cachedRead(matchingFile);
+				const rawContent = await this.app.vault.cachedRead(matchingFile);
+				// Strip pending edit blocks so line numbers match what the AI sees
+				validatedEdit.currentContent = stripPendingEditBlocks(rawContent, this.settings.pendingEditTag);
 			} catch (e) {
 				validatedEdit.error = `Could not read file: ${(e as Error).message}`;
 				validated.push(validatedEdit);
@@ -1621,7 +1624,7 @@ class AIAssistantView extends ItemView {
 		this.submitButton = inputRow.createEl('button', {
 			cls: 'ai-assistant-submit-arrow'
 		});
-		this.submitButton.innerHTML = '&#x27A4;'; // Arrow symbol
+		this.submitButton.textContent = '\u27A4'; // Arrow symbol
 		this.submitButton.title = 'Send message';
 		this.submitButton.addEventListener('click', () => this.handleSubmit());
 
@@ -1957,7 +1960,7 @@ class AIAssistantView extends ItemView {
 				cls: 'ai-assistant-manual-note-remove',
 				attr: { 'aria-label': 'Remove from context' }
 			});
-			removeBtn.innerHTML = '\u00d7'; // × symbol
+			removeBtn.textContent = '\u00d7'; // × symbol
 			removeBtn.addEventListener('click', () => {
 				this.removeManualNote(path);
 			});
@@ -2189,7 +2192,7 @@ class AIAssistantView extends ItemView {
 					}
 				}
 			} catch (error) {
-				console.error('Failed to get semantic matches for preview:', error);
+				this.plugin.logger.error('SEMANTIC', 'Failed to get semantic matches for preview', error);
 			}
 		}
 
@@ -2494,7 +2497,7 @@ class AIAssistantView extends ItemView {
 			}
 			this.contextSummary.setText(summaryText);
 		} catch (e) {
-			console.error('Error updating context summary:', e);
+			this.plugin.logger.error('CONTEXT', 'Error updating context summary', e);
 			this.contextSummary.setText('Error');
 		}
 	}
@@ -2544,7 +2547,7 @@ class AIAssistantView extends ItemView {
 		try {
 			await this.runAgentLoop(userMessage, file);
 		} catch (error) {
-			console.error('Submit error:', error);
+			this.plugin.logger.error('AGENT', 'Submit error', error);
 			this.removeLoadingIndicator(loadingEl);
 			this.removeAgentProgress();
 			this.addMessageToChat('assistant', `Error: ${(error as Error).message || 'An error occurred'}`, { activeFile: file?.path });
@@ -2638,7 +2641,7 @@ class AIAssistantView extends ItemView {
 			debugMode: this.plugin.settings.debugMode
 		};
 
-		const callbacks = this.buildAgentCallbacks();
+		const callbacks = this.buildAgentCallbacks(file);
 
 		const result = await runAgent(
 			input,
@@ -2663,27 +2666,69 @@ class AIAssistantView extends ItemView {
 	}
 
 	// Build AgentCallbacks bridging to Obsidian APIs
-	private buildAgentCallbacks(): AgentCallbacks {
+	private buildAgentCallbacks(snapshotActiveFile: TFile | null): AgentCallbacks {
 		const plugin = this.plugin;
 		const app = this.app;
 		const view = this;
 		const webEnabled = this.isWebSearchConfigured();
+		// Capture active file at agent start to prevent race conditions
+		// if user navigates away during execution
+		const activeFileAtStart = snapshotActiveFile;
+
+		// Helper: get all supported files (.md + .canvas)
+		function getSupportedFiles(): TFile[] {
+			return app.vault.getFiles().filter(f => f.extension === 'md' || f.extension === 'canvas');
+		}
 
 		// Helper: find a note by exact path, partial path, filename, or basename
+		// Returns null if not found. Throws with a descriptive message if ambiguous.
+		// Use safeFindNote() for callbacks that need { error } returns.
 		function findNoteByAnyName(pathOrName: string): TFile | null {
-			const files = app.vault.getMarkdownFiles();
-			return files.find(f =>
-				f.path === pathOrName ||
-				f.path.endsWith('/' + pathOrName) ||
-				f.name === pathOrName ||
-				f.basename === pathOrName ||
-				f.basename === pathOrName.replace(/\.md$/, '')
-			) || null;
+			const files = getSupportedFiles();
+
+			// 1. Exact path match (always unambiguous)
+			const exactMatch = files.find(f => f.path === pathOrName);
+			if (exactMatch) return exactMatch;
+
+			// 2. Suffix match (path ends with /pathOrName)
+			const suffixMatches = files.filter(f => f.path.endsWith('/' + pathOrName));
+			if (suffixMatches.length === 1) return suffixMatches[0];
+			if (suffixMatches.length > 1) {
+				throw new Error(`Ambiguous note name "${pathOrName}" matches ${suffixMatches.length} files: ${suffixMatches.slice(0, 5).map(f => f.path).join(', ')}. Use the full path.`);
+			}
+
+			// 3. Filename match (e.g., "Note.md")
+			const nameMatches = files.filter(f => f.name === pathOrName);
+			if (nameMatches.length === 1) return nameMatches[0];
+			if (nameMatches.length > 1) {
+				throw new Error(`Ambiguous note name "${pathOrName}" matches ${nameMatches.length} files: ${nameMatches.slice(0, 5).map(f => f.path).join(', ')}. Use the full path.`);
+			}
+
+			// 4. Basename match (without extension)
+			const baseName = pathOrName.replace(/\.(md|canvas)$/, '');
+			const baseMatches = files.filter(f => f.basename === baseName);
+			if (baseMatches.length === 1) return baseMatches[0];
+			if (baseMatches.length > 1) {
+				throw new Error(`Ambiguous note name "${pathOrName}" matches ${baseMatches.length} files: ${baseMatches.slice(0, 5).map(f => f.path).join(', ')}. Use the full path.`);
+			}
+
+			return null;
+		}
+
+		// Safe wrapper: returns { file, error } so callers can return error messages
+		function safeFindNote(pathOrName: string): { file: TFile | null; error?: string } {
+			try {
+				const file = findNoteByAnyName(pathOrName);
+				return { file };
+			} catch (e) {
+				return { file: null, error: (e as Error).message };
+			}
 		}
 
 		return {
 			async readNote(path: string) {
-				const matchingFile = findNoteByAnyName(path);
+				const { file: matchingFile, error } = safeFindNote(path);
+				if (error) return { content: error, path, lineCount: 0 };
 				if (!matchingFile) return null;
 				if (plugin.isPathExcluded(matchingFile.path)) {
 					return { content: '', path: matchingFile.path, lineCount: 0, excluded: true };
@@ -2695,7 +2740,7 @@ class AIAssistantView extends ItemView {
 			},
 
 			async searchKeyword(query: string, limit: number): Promise<KeywordResult[]> {
-				const files = app.vault.getMarkdownFiles();
+				const files = getSupportedFiles();
 				const results: KeywordResult[] = [];
 				const queryLower = query.toLowerCase();
 
@@ -2712,7 +2757,8 @@ class AIAssistantView extends ItemView {
 					if (cache?.headings) {
 						const headingMatch = cache.headings.find(h => h.heading.toLowerCase().includes(queryLower));
 						if (headingMatch) {
-							results.push({ path: file.path, name: file.basename, matchType: 'heading', matchContext: headingMatch.heading });
+							const headingLine = headingMatch.position.start.line + 1;
+							results.push({ path: file.path, name: file.basename, matchType: 'heading', matchContext: headingMatch.heading, lineNumber: headingLine });
 							continue;
 						}
 					}
@@ -2721,9 +2767,10 @@ class AIAssistantView extends ItemView {
 					const contentLower = content.toLowerCase();
 					const idx = contentLower.indexOf(queryLower);
 					if (idx !== -1) {
+						const lineNumber = content.substring(0, idx).split('\n').length;
 						const start = Math.max(0, idx - 50);
 						const end = Math.min(content.length, idx + query.length + 50);
-						results.push({ path: file.path, name: file.basename, matchType: 'content', matchContext: content.substring(start, end).trim() });
+						results.push({ path: file.path, name: file.basename, matchType: 'content', matchContext: content.substring(start, end).trim(), lineNumber });
 					}
 				}
 				return results;
@@ -2751,7 +2798,7 @@ class AIAssistantView extends ItemView {
 			},
 
 			async listNotes(folder?: string, limit?: number, previewLength?: number): Promise<NotePreview[]> {
-				const files = app.vault.getMarkdownFiles();
+				const files = getSupportedFiles();
 				const maxResults = limit || 200;
 				const results: NotePreview[] = [];
 				const pLen = previewLength || 0;
@@ -2950,7 +2997,7 @@ class AIAssistantView extends ItemView {
 			},
 
 			async getAllNotes(includeMetadata?: boolean) {
-				return app.vault.getMarkdownFiles()
+				return getSupportedFiles()
 					.filter(f => !plugin.isPathExcluded(f.path))
 					.map(f => {
 						const result: { path: string; aliases?: string[]; description?: string } = { path: f.path };
@@ -3082,11 +3129,10 @@ class AIAssistantView extends ItemView {
 					return { success: false, error: validated[0].error };
 				}
 
-				const activeFile = app.workspace.getActiveFile();
-				if (activeFile) {
+				if (activeFileAtStart) {
 					plugin.filterEditsByRulesWithConfig(
 						validated,
-						activeFile,
+						activeFileAtStart,
 						view.editableScope,
 						view.capabilities,
 						view.contextScopeConfig
@@ -3141,7 +3187,8 @@ class AIAssistantView extends ItemView {
 			},
 
 			async openNote(path: string) {
-				const matchingFile = findNoteByAnyName(path);
+				const { file: matchingFile, error } = safeFindNote(path);
+				if (error) return { success: false, error };
 				if (matchingFile) {
 					await app.workspace.getLeaf('tab').openFile(matchingFile);
 					return { success: true };
@@ -3241,7 +3288,8 @@ class AIAssistantView extends ItemView {
 					return { success: false, error: `Source note not found: ${source}` };
 				}
 				try {
-					const linkTarget = target.replace(/\.md$/, '');
+					const baseName = target.split('/').pop() || target;
+					const linkTarget = baseName.replace(/\.md$/, '');
 					const wikilink = `[[${linkTarget}]]`;
 
 					// Determine position for the edit
@@ -3298,7 +3346,8 @@ class AIAssistantView extends ItemView {
 
 			// Advanced vault reading callbacks (always provided; filtering by disabledTools in agent.ts)
 			async getProperties(path: string) {
-				const file = findNoteByAnyName(path);
+				const { file, error } = safeFindNote(path);
+				if (error) return null; // vaultTools.ts handles null with "not found" message
 				if (!file) return null;
 				if (plugin.isPathExcluded(file.path)) return null;
 				const cache = app.metadataCache.getFileCache(file);
@@ -3312,7 +3361,8 @@ class AIAssistantView extends ItemView {
 			},
 
 			async getFileInfo(path: string) {
-				const file = findNoteByAnyName(path);
+				const { file, error } = safeFindNote(path);
+				if (error) return null; // vaultTools.ts handles null with "not found" message
 				if (!file) return null;
 				if (plugin.isPathExcluded(file.path)) return null;
 				return {
@@ -3329,7 +3379,7 @@ class AIAssistantView extends ItemView {
 				for (const [sourcePath, links] of Object.entries(unresolvedLinks)) {
 					if (plugin.isPathExcluded(sourcePath)) continue;
 					if (path) {
-						const file = findNoteByAnyName(path);
+						const { file } = safeFindNote(path);
 						if (!file || file.path !== sourcePath) continue;
 					}
 					for (const deadLink of Object.keys(links)) {
@@ -3340,7 +3390,7 @@ class AIAssistantView extends ItemView {
 			},
 
 			async queryNotes(filter: Record<string, unknown>, options: any) {
-				const files = app.vault.getMarkdownFiles();
+				const files = getSupportedFiles();
 				let results: Array<{ path: string; matchingProperties?: Record<string, unknown>; modified?: number; created?: number }> = [];
 
 				for (const file of files) {
@@ -3410,7 +3460,9 @@ class AIAssistantView extends ItemView {
 					}
 					// Don't delete immediately — show confirmation bubble
 					view.renderPendingDeletionBubble(file);
-					return { success: true };
+					// Return success but signal that deletion is pending user confirmation
+					// The file still exists until the user clicks "Delete"
+					return { success: true, pending: true };
 				} catch (e) {
 					return { success: false, error: (e as Error).message };
 				}
@@ -3436,7 +3488,7 @@ class AIAssistantView extends ItemView {
 			},
 
 			async getVaultStats(): Promise<string> {
-				const files = app.vault.getMarkdownFiles();
+				const files = getSupportedFiles();
 				const folders = new Set<string>();
 				const tagCounts = new Map<string, number>();
 				let totalSize = 0;
@@ -3513,17 +3565,16 @@ ${recent || 'none'}`;
 				if (paths && paths.length > 0) {
 					targetFiles = [];
 					for (const p of paths) {
-						const f = findNoteByAnyName(p);
+						const { file: f, error } = safeFindNote(p);
 						if (f) targetFiles.push(f);
-						else errors.push(`Note not found: "${p}"`);
+						else errors.push(error || `Note not found: "${p}"`);
 					}
 				} else {
-					// Use all editable files based on current scope
-					const activeFile = app.workspace.getActiveFile();
-					if (!activeFile) {
+					// Use snapshotted active file for scope determination
+					if (!activeFileAtStart) {
 						return { matchCount: 0, fileCount: 0, errors: ['No active file — cannot determine editable scope'] };
 					}
-					const editableSet = plugin.getEditableFilesWithConfig(activeFile, view.editableScope, view.contextScopeConfig);
+					const editableSet = plugin.getEditableFilesWithConfig(activeFileAtStart, view.editableScope, view.contextScopeConfig);
 					targetFiles = app.vault.getMarkdownFiles().filter(f => editableSet.has(f.path));
 				}
 
@@ -3562,9 +3613,8 @@ ${recent || 'none'}`;
 									errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
 									continue;
 								}
-								const activeFile = app.workspace.getActiveFile();
-								if (activeFile) {
-									plugin.filterEditsByRulesWithConfig(validated, activeFile, view.editableScope, view.capabilities, view.contextScopeConfig);
+								if (activeFileAtStart) {
+									plugin.filterEditsByRulesWithConfig(validated, activeFileAtStart, view.editableScope, view.capabilities, view.contextScopeConfig);
 								}
 								if (validated[0]?.error) {
 									errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
@@ -3611,6 +3661,214 @@ ${recent || 'none'}`;
 				const end = Math.max(0, historyPool.length - offset);
 				const slice = historyPool.slice(start, end).reverse();
 				return { messages: slice, totalAvailable };
+			},
+
+			async getNoteStats(paths: string[]) {
+				const results: any[] = [];
+				for (const p of paths) {
+					const { file, error } = safeFindNote(p);
+					if (!file) {
+						results.push({ path: p, error: error || 'Note not found' });
+						continue;
+					}
+					if (plugin.isPathExcluded(file.path)) {
+						results.push({ path: file.path, error: 'Note is in an excluded folder' });
+						continue;
+					}
+					const content = await app.vault.cachedRead(file);
+					const lines = content.split('\n');
+					const words = content.split(/\s+/).filter(w => w.length > 0);
+
+					// Headings from metadata cache
+					const cache = app.metadataCache.getFileCache(file);
+					const headings = cache?.headings || [];
+					const headingsByLevel: Record<string, number> = {};
+					for (const h of headings) {
+						const key = `h${h.level}`;
+						headingsByLevel[key] = (headingsByLevel[key] || 0) + 1;
+					}
+
+					// Paragraphs: non-empty blocks separated by blank lines
+					let paragraphCount = 0;
+					let inParagraph = false;
+					for (const line of lines) {
+						if (line.trim().length > 0) {
+							if (!inParagraph) { paragraphCount++; inParagraph = true; }
+						} else {
+							inParagraph = false;
+						}
+					}
+
+					// Code blocks: count fenced code block pairs
+					let codeBlockCount = 0;
+					for (const line of lines) {
+						if (line.trimStart().startsWith('```')) codeBlockCount++;
+					}
+					codeBlockCount = Math.floor(codeBlockCount / 2);
+
+					results.push({
+						path: file.path,
+						wordCount: words.length,
+						charCount: content.length,
+						lineCount: lines.length,
+						headingCount: headings.length,
+						headingsByLevel,
+						paragraphCount,
+						codeBlockCount,
+						readingTimeMinutes: Math.max(1, Math.round(words.length / 200))
+					});
+				}
+				return results;
+			},
+
+			async getNoteConnections(paths: string[]) {
+				const results: any[] = [];
+				for (const p of paths) {
+					const { file, error: findError } = safeFindNote(p);
+					if (!file) {
+						results.push({ path: p, error: findError || 'Note not found' });
+						continue;
+					}
+					if (plugin.isPathExcluded(file.path)) {
+						results.push({ path: file.path, error: 'Note is in an excluded folder' });
+						continue;
+					}
+					const cache = app.metadataCache.getFileCache(file);
+
+					// Tags: combine frontmatter + inline
+					const tagSet = new Set<string>();
+					if (cache?.frontmatter?.tags) {
+						const fmTags = Array.isArray(cache.frontmatter.tags) ? cache.frontmatter.tags : [cache.frontmatter.tags];
+						for (const t of fmTags) tagSet.add(String(t).replace(/^#/, ''));
+					}
+					if (cache?.tags) {
+						for (const t of cache.tags) tagSet.add(t.tag.replace(/^#/, ''));
+					}
+					const tagList = [...tagSet].sort();
+
+					// Outgoing links
+					const outgoing = (cache?.links || []).map(l => l.link);
+					const outgoingUnique = [...new Set(outgoing)];
+
+					// Backlinks
+					const backlinkPaths = plugin.getBacklinkPaths(file);
+
+					// Embeds
+					const embeds = (cache?.embeds || []).map(e => e.link);
+					const embedsUnique = [...new Set(embeds)];
+
+					results.push({
+						path: file.path,
+						tags: { count: tagList.length, list: tagList },
+						outgoingLinks: { count: outgoingUnique.length, list: outgoingUnique },
+						backlinks: { count: backlinkPaths.length, list: backlinkPaths },
+						embeds: { count: embedsUnique.length, list: embedsUnique }
+					});
+				}
+				return results;
+			},
+
+			async getSelection() {
+				const mdView = app.workspace.getActiveViewOfType(MarkdownView);
+				if (!mdView) return null;
+				const editor = mdView.editor;
+				if (!editor) return null;
+				const text = editor.getSelection();
+				if (!text) return null;
+				const file = mdView.file;
+				if (!file) return null;
+				const from = editor.getCursor('from');
+				const to = editor.getCursor('to');
+				return {
+					text,
+					file: file.path,
+					startLine: from.line + 1,
+					endLine: to.line + 1
+				};
+			},
+
+			async previewPendingEdits(path?: string) {
+				const files = path
+					? [app.vault.getAbstractFileByPath(path)].filter((f): f is TFile => f instanceof TFile)
+					: app.vault.getMarkdownFiles();
+				const edits: { file: string; edit: any }[] = [];
+				for (const file of files) {
+					const content = await app.vault.cachedRead(file);
+					if (!content.includes('```ai-edit')) continue;
+					const fileEdits = plugin.editManager.extractEditsFromContent(content);
+					for (const e of fileEdits) {
+						edits.push({ file: file.path, edit: e });
+						if (edits.length >= 30) break;
+					}
+					if (edits.length >= 30) break;
+				}
+				if (edits.length === 0) {
+					return path
+						? `No pending edits in "${path}".`
+						: 'No pending edits in the vault.';
+				}
+				const lines: string[] = [`Found ${edits.length} pending edit(s):`];
+				for (const { file, edit } of edits) {
+					const before = (edit.before || '').substring(0, 200) + (edit.before && edit.before.length > 200 ? '...' : '');
+					const after = (edit.after || '').substring(0, 200) + (edit.after && edit.after.length > 200 ? '...' : '');
+					lines.push(`\n[${edit.type.toUpperCase()}] ${file} (id=${edit.id})`);
+					if (before) lines.push(`  BEFORE: ${before}`);
+					if (after) lines.push(`  AFTER: ${after}`);
+				}
+				return lines.join('\n');
+			},
+
+			async findOrphanNotes() {
+				const files = app.vault.getMarkdownFiles();
+				const resolvedLinks = app.metadataCache.resolvedLinks;
+				// Build a set of all files that have incoming links
+				const hasIncoming = new Set<string>();
+				for (const sourcePath in resolvedLinks) {
+					const targets = resolvedLinks[sourcePath];
+					for (const targetPath in targets) {
+						hasIncoming.add(targetPath);
+					}
+				}
+				const orphans: string[] = [];
+				for (const file of files) {
+					if (plugin.isPathExcluded(file.path)) continue;
+					const outgoing = resolvedLinks[file.path];
+					const hasOutgoing = outgoing && Object.keys(outgoing).length > 0;
+					if (!hasOutgoing && !hasIncoming.has(file.path)) {
+						orphans.push(file.path);
+					}
+				}
+				return orphans;
+			},
+
+			async findUnlinkedMentions(noteName: string, targetPath?: string) {
+				const files = getSupportedFiles();
+				// Escape regex special chars in note name
+				const escaped = noteName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				const mentionRegex = new RegExp(`\\b${escaped}\\b`, 'gi');
+				const wikiLinkRegex = /\[\[[^\]]*\]\]/g;
+				const results: { file: string; line: number; context: string }[] = [];
+				// Determine the file to skip (the note itself)
+				const skipPath = targetPath || files.find(f => f.basename === noteName)?.path;
+				for (const file of files) {
+					if (plugin.isPathExcluded(file.path)) continue;
+					if (skipPath && file.path === skipPath) continue;
+					const content = await app.vault.cachedRead(file);
+					const lines = content.split('\n');
+					for (let i = 0; i < lines.length; i++) {
+						const line = lines[i];
+						// Strip wikilinks from the line before checking
+						const stripped = line.replace(wikiLinkRegex, '');
+						if (mentionRegex.test(stripped)) {
+							mentionRegex.lastIndex = 0; // reset regex state
+							const context = line.trim().substring(0, 150);
+							results.push({ file: file.path, line: i + 1, context });
+							if (results.length >= 100) break; // hard cap
+						}
+					}
+					if (results.length >= 100) break;
+				}
+				return results;
 			},
 
 			async askUser(question: string, choices?: string[]) {
@@ -3747,7 +4005,8 @@ ${recent || 'none'}`;
 			tokenUsage: {
 				totalTokens: result.tokenUsage.total,
 				promptTokens: result.tokenUsage.promptTokens,
-				completionTokens: result.tokenUsage.completionTokens
+				completionTokens: result.tokenUsage.completionTokens,
+				cachedTokens: result.tokenUsage.cachedTokens
 			},
 			model: this.plugin.settings.aiModel,
 			webSources: result.webSourcesUsed,
@@ -4451,7 +4710,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 		new Setting(tokenTogglePricingContainer)
 			.setName('Show token usage & cost estimate')
-			.setDesc('Display token count and estimated cost below each AI response.')
+			.setDesc('Display token count and estimated cost below each AI response. Note: This feature is still in development, not fully tested, and is known to often overestimate costs.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.showTokenUsage)
 				.onChange(async (value) => {
@@ -4782,7 +5041,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		try {
 			const existingIndex = await loadEmbeddingIndex(
 				this.app.vault,
-				'.obsidian/plugins/obsidian-agent',
+				this.plugin.manifest.dir!,
 				this.plugin.logger
 			);
 
@@ -4807,7 +5066,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 
 			await saveEmbeddingIndex(
 				this.app.vault,
-				'.obsidian/plugins/obsidian-agent',
+				this.plugin.manifest.dir!,
 				result.index
 			);
 
@@ -4830,7 +5089,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				this.renderIndexStatusContent(statusEl as HTMLElement, result.index);
 			}
 		} catch (error) {
-			console.error('Reindex failed:', error);
+			this.plugin.logger.error('SEMANTIC', 'Reindex failed', error);
 			progressNotice.hide();
 			new Notice(`Reindex failed: ${(error as Error).message}`);
 		} finally {
@@ -4887,7 +5146,7 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		if (removed > 0) {
 			await saveEmbeddingIndex(
 				this.app.vault,
-				'.obsidian/plugins/obsidian-agent',
+				this.plugin.manifest.dir!,
 				index
 			);
 			new Notice(`Removed ${removed} embedding(s) from excluded folder "${folder}".`);
@@ -4981,11 +5240,17 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			query_notes: 'Query Notes',
 			delete_note: 'Delete Note',
 			execute_command: 'Execute Command',
+			get_note_stats: 'Note Stats',
+			get_note_connections: 'Note Connections',
+			get_selection: 'Selection',
+			preview_pending_edits: 'Preview Edits',
+			find_orphan_notes: 'Orphan Notes',
+			find_unlinked_mentions: 'Unlinked Mentions',
 		};
 
 		const vaultTools = [
 			'search_vault', 'read_note', 'list_notes', 'get_links',
-			'explore_structure', 'list_tags', 'get_manual_context'
+			'explore_structure', 'list_tags', 'get_manual_context', 'get_selection'
 		];
 		const webToolNames = ['web_search', 'read_webpage'];
 		const actionTools = [
@@ -4995,6 +5260,8 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		];
 		const advancedTools = [
 			'get_properties', 'get_file_info', 'find_dead_links', 'query_notes',
+			'get_note_stats', 'get_note_connections',
+			'preview_pending_edits', 'find_orphan_notes', 'find_unlinked_mentions',
 			'delete_note', 'execute_command'
 		];
 

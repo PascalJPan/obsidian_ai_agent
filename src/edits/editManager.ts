@@ -11,6 +11,7 @@
 import { Vault, TFile, Notice } from 'obsidian';
 import { ValidatedEdit, InlineEdit } from '../types';
 import { escapeRegex, determineEditType } from '../ai/validation';
+import { stripPendingEditBlocks } from '../ai/context';
 import { Logger } from '../utils/logger';
 
 /**
@@ -63,7 +64,7 @@ export class EditManager {
 				const edit = JSON.parse(match[1]);
 				edits.push(edit);
 			} catch (e) {
-				console.error('Failed to parse edit block:', e);
+				this.deps.logger.error('PARSE', 'Failed to parse edit block', e);
 			}
 		}
 
@@ -85,7 +86,7 @@ export class EditManager {
 					ids.push(data.id);
 				}
 			} catch (e) {
-				console.error('Failed to parse ai-new-note block:', e);
+				this.deps.logger.error('PARSE', 'Failed to parse ai-new-note block', e);
 			}
 		}
 
@@ -378,7 +379,7 @@ export class EditManager {
 				await this.deps.vault.create(filePath, banner + edit.newContent);
 				success++;
 			} catch (e) {
-				console.error('Failed to create new file:', e);
+				this.deps.logger.error('EDIT', 'Failed to create new file', e);
 				failed++;
 			}
 		}
@@ -402,6 +403,12 @@ export class EditManager {
 				// Read file content once
 				let content = await this.deps.vault.read(file);
 
+				// Strip pending edit blocks so line numbers match AI's view
+				// Tradeoff: existing pending edits in this file are removed
+				if (content.includes('```ai-edit') || content.includes('```ai-new-note')) {
+					content = stripPendingEditBlocks(content, this.deps.getPendingEditTag());
+				}
+
 				// Sort edits by line number descending (bottom-to-top)
 				const sortedEdits = this.sortEditsByLineDescending(edits);
 
@@ -420,6 +427,12 @@ export class EditManager {
 
 				// Write the file once with all edits applied
 				await this.deps.vault.modify(file, content);
+
+				// Validate integrity of the written content
+				const warnings = this.validateEditBlockIntegrity(content);
+				for (const warning of warnings) {
+					this.deps.logger.error('EDIT', `Integrity warning in ${filePath}: ${warning}`);
+				}
 			} catch (e) {
 				this.deps.logger.error('EDIT', `Failed to insert edit blocks for file: ${filePath}`, e);
 				failed += edits.length;
@@ -434,6 +447,36 @@ export class EditManager {
 		});
 
 		return { success, failed };
+	}
+
+	/**
+	 * Validate integrity of edit blocks in content.
+	 * Checks for nested ai-edit blocks (corruption) and invalid JSON.
+	 * Returns array of warning strings (empty = clean).
+	 */
+	validateEditBlockIntegrity(content: string): string[] {
+		const warnings: string[] = [];
+
+		// Check for nested ai-edit blocks (an ai-edit block inside another)
+		const editBlockRegex = /```ai-edit\n([\s\S]*?)```/g;
+		let match;
+		while ((match = editBlockRegex.exec(content)) !== null) {
+			const blockContent = match[1];
+
+			// If the block content itself contains another ai-edit fence, it's nested/corrupted
+			if (blockContent.includes('```ai-edit')) {
+				warnings.push('Nested ai-edit block detected — edit block corruption');
+			}
+
+			// Validate JSON inside the block
+			try {
+				JSON.parse(blockContent);
+			} catch {
+				warnings.push(`Invalid JSON in ai-edit block: ${blockContent.substring(0, 100)}`);
+			}
+		}
+
+		return warnings;
 	}
 
 	/**

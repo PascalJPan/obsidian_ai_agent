@@ -9,9 +9,9 @@ This is an Obsidian plugin that provides an AI assistant for note editing and an
 
 ### Unified Agent
 
-A single agent with a ReAct (Think → Act → Observe) loop explores the vault, searches the web, and takes actions in one unified loop. Replaces the previous 3-phase pipeline (Scout → Web → Task). The agent has **29 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
+A single agent with a ReAct (Think → Act → Observe) loop explores the vault, searches the web, and takes actions in one unified loop. Replaces the previous 3-phase pipeline (Scout → Web → Task). The agent has **35 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
 
-- **Vault tools** (13): `search_vault`, `read_note`, `list_notes`, `get_links`, `explore_structure`, `list_tags`, `get_manual_context`, `get_properties`, `get_file_info`, `find_dead_links`, `query_notes`, `get_vault_stats`, `get_chat_history`
+- **Vault tools** (19): `search_vault`, `read_note`, `list_notes`, `get_links`, `explore_structure`, `list_tags`, `get_manual_context`, `get_properties`, `get_file_info`, `find_dead_links`, `query_notes`, `get_vault_stats`, `get_chat_history`, `get_note_stats`, `get_note_connections`, `get_selection`, `preview_pending_edits`, `find_orphan_notes`, `find_unlinked_mentions`
 - **Web tools** (2): `web_search`, `read_webpage` (only if search API is configured)
 - **Action tools** (14): `edit_note`, `create_note`, `open_note`, `move_note`, `update_properties`, `add_tags`, `link_notes`, `copy_notes`, `delete_note`, `execute_command`, `append_to_note`, `search_and_replace`, `done`, `ask_user`
 - **Custom Info tools** (0+): User-defined zero-parameter tools that return reference content on demand (e.g., plugin syntax docs). Ships with a **Dataview Reference** tool (`info_dataview_reference`) enabled by default — covers DQL syntax, all 60+ functions, implicit fields, DataviewJS API, and common patterns.
@@ -27,8 +27,11 @@ A single agent with a ReAct (Think → Act → Observe) loop explores the vault,
 - Hard iteration cap (`agentMaxIterations`, 5-20, default 10)
 - Total token budget (`agentMaxTokens`, default 100,000)
 - Final round: only `done` + action tools available
-- Stuck detection: same tool+args 3x → warning + force finalization
+- Stuck detection: same tool+args 3x → warning + force finalization; tool-name-only frequency ≥8 → secondary warning
 - Cancel button: aborts via AbortSignal after current round
+- API retry: transient failures (429/5xx) retried up to 2x with exponential backoff
+- Custom info tool results truncated at 32K chars to prevent token budget exhaustion
+- `parallel_tool_calls: false` to prevent stale line numbers from concurrent edits
 
 ### Scopes
 - **Context Scope** (`ContextScopeConfig`): Which notes are sent to AI as manual context
@@ -38,8 +41,7 @@ A single agent with a ReAct (Think → Act → Observe) loop explores the vault,
 
 - **Editable Scope** (`EditableScope`): Which notes AI is allowed to edit
   - `current`: Only current note
-  - `linked`: Current + directly linked notes
-  - `context`: All context notes
+  - `vault`: Any note in the vault
 
 ### Capabilities (`AICapabilities`)
 - `canAdd`: Allow line insertions
@@ -48,18 +50,16 @@ A single agent with a ReAct (Think → Act → Observe) loop explores the vault,
 - `canNavigate`: Allow opening notes in new tabs (derived from `disabledTools`)
 
 ### Settings (`MyPluginSettings`)
-- `aiModel`: OpenAI model (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, etc.)
-- `agentMaxIterations`: Max think-act-observe rounds (5-20, default 10)
-- `agentMaxTokens`: Total token budget (default 100,000)
-- `chatHistoryLength`: Previous messages to include (0-100, default 10). Window sends slim Q&A text only; full details (edits, results, files) available via `get_chat_history` tool.
-- `disabledTools`: Tools turned off by user
-- `whitelistedCommands`: Commands the agent can execute
-- `customInfoTools`: User-defined knowledge tools (see CustomInfoTool below)
-- `customModelPricing`: User overrides for model pricing rates ($/1M tokens, sparse — only edited models stored)
-- `excludedTag`: Tag that marks notes as private (default: `"private"`)
-- Web search API settings (openai, serper, brave, tavily)
-- Edit rules (scope, capabilities)
-- Feature toggles: `enableWebSearch`, `enableEmbeddings`, `enableManualContext` (all default `false`)
+- **Core**: `aiModel`, `openaiApiKey`, `customInstructions`, `pendingEditTag`
+- **Agent**: `agentMaxIterations` (5-20, default 10), `agentMaxTokens` (default 100,000), `chatHistoryLength` (0-100, default 10 — slim Q&A window; full details via `get_chat_history` tool)
+- **Context defaults**: `defaultLinkDepth`, `defaultMaxLinkedNotes`, `defaultMaxFolderNotes`, `defaultSemanticMatchCount`, `defaultSemanticMinSimilarity`
+- **Edit defaults**: `defaultEditableScope`, `defaultCanAdd`, `defaultCanDelete`
+- **Tool control**: `disabledTools`, `whitelistedCommands`, `customInfoTools`, `customModelPricing` ($/1M tokens, sparse — only edited models stored)
+- **Privacy**: `excludedFolders`, `excludedTag` (default `"private"`)
+- **Web search**: `webAgentSearchApi` (openai, serper, brave, tavily), `webAgentSearchApiKey`, `webAgentSnippetLimit`, `webAgentFetchLimit`, `webAgentTokenBudget`
+- **Feature toggles**: `enableWebSearch`, `enableEmbeddings`, `enableManualContext` (all default `false`)
+- **UI**: `debugMode`, `clearChatOnNoteSwitch`, `showTokenUsage`, `embeddingModel`
+- **Internal**: `_defaultInfoToolsVersion`
 
 ## Core Data Structures
 
@@ -103,16 +103,23 @@ interface AgentConfig {
   customInfoTools: CustomInfoTool[];
   customPrompts?: { character?: string };
   chatHistoryLength: number; debugMode: boolean;
+  webSearchApi?: SearchApiType;
+  webSearchApiKey?: string;
+  webSnippetLimit?: number;
+  webFetchLimit?: number;
+  webTokenBudget?: number;
 }
 ```
 
 ### AgentCallbacks
-Bridges pure agent logic to Obsidian APIs:
-- **Vault reading**: `readNote`, `searchKeyword`, `searchSemantic`, `listNotes`, `getLinks`, `exploreStructure`, `listTags`, `getAllNotes`, `getManualContext`, `getProperties`, `getFileInfo`, `findDeadLinks`, `queryNotes`, `getVaultStats?`, `getChatHistory?`
+Bridges pure agent logic to Obsidian APIs. Built via `buildAgentCallbacks(snapshotActiveFile)` — active file is captured once at agent start and closed over to prevent race conditions if user navigates during execution.
+- **Vault reading**: `readNote`, `searchKeyword`, `searchSemantic`, `listNotes`, `getLinks`, `exploreStructure`, `listTags`, `getAllNotes`, `getManualContext`, `getProperties`, `getFileInfo`, `findDeadLinks`, `queryNotes`, `getVaultStats?`, `getChatHistory?`, `getNoteStats?`, `getNoteConnections?`, `getSelection?`, `previewPendingEdits?`, `findOrphanNotes?`, `findUnlinkedMentions?`
 - **Web**: `webSearch?`, `fetchPage?`
-- **Actions**: `proposeEdit`, `createNote`, `openNote`, `moveNote`, `updateProperties`, `addTags`, `linkNotes`, `copyNotes`, `deleteNote`, `executeCommand`, `searchAndReplace?`
+- **Actions**: `proposeEdit`, `createNote`, `openNote`, `moveNote`, `updateProperties`, `addTags`, `linkNotes`, `copyNotes`, `deleteNote` (returns `pending: true`), `executeCommand`, `searchAndReplace?`
 - **Custom Info**: `resolveCustomInfoTool?` — resolves inline content or reads vault note for custom info tools
 - **Meta**: `askUser` (Promise-based pause — blocks the loop until user responds, 2min timeout), `onProgress`
+
+**`findNoteByAnyName`** resolves paths through: exact path → suffix match → filename → basename. Throws an error when multiple files match at any level (ambiguity), which `safeFindNote()` wrapper catches and converts to error messages.
 
 ### AgentResult
 ```typescript
@@ -138,7 +145,7 @@ interface AgentResult {
 
 ## Key Methods
 
-### main.ts (Obsidian integration, ~4,500 lines)
+### main.ts (Obsidian integration, ~5,700 lines)
 
 **MyPlugin**
 - `validateEdits()` — validates AI instructions, resolves files, computes new content
@@ -148,7 +155,7 @@ interface AgentResult {
 
 **AIAssistantView**
 - `runAgentLoop()` — creates config, calls `runAgent()`, displays results
-- `buildAgentCallbacks()` — bridges all 28 agent callbacks to Obsidian APIs
+- `buildAgentCallbacks(snapshotActiveFile)` — bridges all 32 agent callbacks to Obsidian APIs; captures active file at start
 - `showUserClarificationUI()` — Promise-based UI for `ask_user` tool
 - `showAgentProgress()` — real-time progress display during agent execution
 - `completeAgentProgressFromResult()` — renders detail sections (notes, web, edits) in the progress container
@@ -222,13 +229,13 @@ npm run build  # Production build (tsc + esbuild)
 
 ## File Structure
 ```
-main.ts              - Entry point, plugin lifecycle, UI, callbacks (~4,500 lines)
+main.ts              - Entry point, plugin lifecycle, UI, callbacks (~5,700 lines)
 src/
   types.ts           - Shared type definitions
   ai/
     agent.ts         - Unified Agent ReAct loop engine
     tools/
-      vaultTools.ts  - 12 vault exploration tools (includes get_vault_stats)
+      vaultTools.ts  - 19 vault exploration tools (includes get_selection, preview_pending_edits, find_orphan_notes, find_unlinked_mentions)
       webTools.ts    - 2 web search tools
       actionTools.ts - 14 action tools (edit, create, move, delete, execute, append, search_and_replace, etc.)
     prompts/
@@ -248,6 +255,7 @@ src/
     index.ts         - Modal components (TokenWarning, PendingEdits, ContextPreview, NotePicker)
   defaults/
     dataviewReference.ts - Default Dataview Reference info tool (shipped built-in)
+    defaultInstructions.ts - Default custom instructions for new installations
   utils/
     logger.ts        - Structured logging with categories
     fileUtils.ts     - File exclusion utilities

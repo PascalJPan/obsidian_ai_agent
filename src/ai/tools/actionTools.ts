@@ -60,16 +60,20 @@ export const TOOL_OPEN_NOTE: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'open_note',
-		description: 'Open a note in a new tab. Use when the user wants to navigate to a note.',
+		description: 'Open one or more notes in new tabs. Use path for a single note, or paths array for batch.',
 		parameters: {
 			type: 'object',
 			properties: {
 				path: {
 					type: 'string',
-					description: 'Path to the note to open'
+					description: 'Path to a single note to open'
+				},
+				paths: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Array of note paths to open in batch'
 				}
-			},
-			required: ['path']
+			}
 		}
 	}
 };
@@ -166,7 +170,7 @@ export const TOOL_LINK_NOTES: OpenAITool = {
 				},
 				target: {
 					type: 'string',
-					description: 'Path or name of the note to link to (will be converted to wikilink)'
+					description: 'Name of the note to link to (just the note name, no folder path)'
 				},
 				context: {
 					type: 'string',
@@ -295,7 +299,7 @@ export const TOOL_DELETE_NOTE: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'delete_note',
-		description: 'Move a note to trash. This is reversible — the note can be restored from .trash.',
+		description: 'Request to move a note to trash. The user must confirm before deletion happens. Reversible — can be restored from .trash.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -373,8 +377,8 @@ export function getActionTools(
 	if (capabilities.canDelete) {
 		tools.push(TOOL_SEARCH_AND_REPLACE);
 	}
-	tools.push(TOOL_CREATE_NOTE);
-	tools.push(TOOL_OPEN_NOTE);
+	if (capabilities.canCreate) tools.push(TOOL_CREATE_NOTE);
+	if (capabilities.canNavigate) tools.push(TOOL_OPEN_NOTE);
 	if (capabilities.canAdd || capabilities.canDelete) {
 		tools.push(TOOL_MOVE_NOTE);
 		tools.push(TOOL_UPDATE_PROPERTIES);
@@ -423,7 +427,7 @@ export async function handleActionToolCall(
 			const result = await callbacks.proposeEdit(edit);
 			if (result.success) {
 				state.editsProposed++;
-				return { result: `Edit applied to "${edit.file}" at position "${edit.position}". The user will see a pending edit block to accept/reject.` };
+				return { result: `Pending edit proposed for "${edit.file}" at position "${edit.position}". The user will see this as a reviewable block to accept/reject.` };
 			} else {
 				return { result: `Edit failed: ${result.error}. You can re-read the note and try again with corrected line numbers.` };
 			}
@@ -442,13 +446,38 @@ export async function handleActionToolCall(
 		}
 
 		case 'open_note': {
-			const path = args.path as string;
-			const result = await callbacks.openNote(path);
-			if (result.success) {
-				return { result: `Opened "${path}" in a new tab.` };
-			} else {
-				return { result: `Failed to open note: ${result.error}` };
+			const pathsArg = args.paths as string[] | undefined;
+			const pathList: string[] = pathsArg && pathsArg.length > 0
+				? pathsArg
+				: (args.path ? [args.path as string] : []);
+
+			if (pathList.length === 0) {
+				return { result: 'No path(s) provided.' };
 			}
+
+			if (pathList.length === 1) {
+				const result = await callbacks.openNote(pathList[0]);
+				if (result.success) {
+					return { result: `Opened "${pathList[0]}" in a new tab.` };
+				} else {
+					return { result: `Failed to open note: ${result.error}` };
+				}
+			}
+
+			const successes: string[] = [];
+			const failures: string[] = [];
+			for (const p of pathList) {
+				const result = await callbacks.openNote(p);
+				if (result.success) {
+					successes.push(p);
+				} else {
+					failures.push(`"${p}": ${result.error}`);
+				}
+			}
+			const parts: string[] = [];
+			parts.push(`Opened ${successes.length}/${pathList.length} notes in new tabs.`);
+			if (failures.length > 0) parts.push('Failed:\n' + failures.map(f => `  ${f}`).join('\n'));
+			return { result: parts.join('\n') };
 		}
 
 		case 'move_note': {
@@ -533,6 +562,9 @@ export async function handleActionToolCall(
 			if (!callbacks.deleteNote) return { result: 'Error: delete_note is not available.' };
 			const result = await callbacks.deleteNote(path);
 			if (result.success) {
+				if (result.pending) {
+					return { result: `Deletion of "${path}" is pending user confirmation. The user will see a Keep/Delete button. The note still exists until they confirm — do NOT assume it is deleted.` };
+				}
 				return { result: `Moved "${path}" to trash. The note can be restored from .trash.` };
 			} else {
 				return { result: `Failed to delete note: ${result.error}` };

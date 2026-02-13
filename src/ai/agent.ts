@@ -19,7 +19,7 @@ import {
 	EditInstruction,
 } from '../types';
 import { Logger } from '../utils/logger';
-import { getVaultTools, handleVaultToolCall, OpenAITool } from './tools/vaultTools';
+import { getVaultTools, handleVaultToolCall, OpenAITool, ALL_VAULT_TOOLS } from './tools/vaultTools';
 import { ALL_WEB_TOOLS, handleWebToolCall } from './tools/webTools';
 import { getActionTools, handleActionToolCall, ActionToolState, buildCustomInfoTools } from './tools/actionTools';
 import { buildAgentSystemPrompt, buildAgentInitialMessage, buildFinalRoundWarning, buildStuckWarning } from './prompts/agentPrompts';
@@ -68,6 +68,10 @@ export async function runAgent(
 	const customInfoToolDefs = buildCustomInfoTools(config.customInfoTools || []);
 	const customInfoToolNames = new Set(customInfoToolDefs.map(t => t.function.name));
 
+	// Derive tool name sets from source-of-truth arrays for dispatch routing
+	const vaultToolNames = new Set(ALL_VAULT_TOOLS.map(t => t.function.name));
+	const webToolNames = new Set(ALL_WEB_TOOLS.map(t => t.function.name));
+
 	const allTools: OpenAITool[] = [
 		...filterTools(getVaultTools()),
 		...(config.webEnabled ? filterTools(ALL_WEB_TOOLS) : []),
@@ -87,13 +91,16 @@ export async function runAgent(
 	let totalTokens = 0;
 	let totalPromptTokens = 0;
 	let totalCompletionTokens = 0;
+	let totalCachedTokens = 0;
 	let lastRoundTokens = 0;
 	let finished = false;
 	let summary = '';
 	const editsProposed: EditInstruction[] = [];
 
-	// Stuck detection: track repeated tool calls
+	// Stuck detection: track repeated tool calls (exact match + name-only frequency)
 	const toolCallHistory: Map<string, number> = new Map();
+	const toolNameFrequency: Map<string, number> = new Map();
+	const TOOL_NAME_FREQUENCY_LIMIT = 8; // warn after same tool called 8+ times (any args)
 
 	if (config.debugMode) {
 		logger?.log('AGENT', 'Starting agent loop', {
@@ -108,7 +115,7 @@ export async function runAgent(
 	for (let iteration = 1; iteration <= config.maxIterations && !finished; iteration++) {
 		// Check cancellation
 		if (signal?.aborted) {
-			return buildResult(false, 'Cancelled by user', editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, tokenPerRound, iteration - 1);
+			return buildResult(false, 'Cancelled by user', editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, totalCachedTokens, tokenPerRound, iteration - 1);
 		}
 
 		// Determine tools for this iteration
@@ -141,33 +148,58 @@ export async function runAgent(
 		});
 
 		try {
-			// API call
-			const response = await requestUrl({
-				url: 'https://api.openai.com/v1/chat/completions',
-				method: 'POST',
-				headers: {
-					'Authorization': `Bearer ${config.apiKey}`,
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({
-					model: config.model,
-					messages,
-					tools: currentTools.map(t => ({ type: t.type, function: t.function })),
-					parallel_tool_calls: true,
-				}),
-			});
-
-			const data = response.json;
+			// API call with retry for transient errors (429/5xx)
+			const MAX_RETRIES = 2;
+			let data: any;
+			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+				try {
+					const response = await requestUrl({
+						url: 'https://api.openai.com/v1/chat/completions',
+						method: 'POST',
+						headers: {
+							'Authorization': `Bearer ${config.apiKey}`,
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({
+							model: config.model,
+							messages,
+							tools: currentTools.map(t => ({ type: t.type, function: t.function })),
+							// Disabled: parallel tool calls can cause stale line numbers when
+							// multiple edits target the same file in one response
+							parallel_tool_calls: false,
+						}),
+					});
+					data = response.json;
+					break; // Success
+				} catch (reqError: any) {
+					const status = reqError?.status || reqError?.response?.status;
+					const isRetryable = status === 429 || (status >= 500 && status < 600);
+					if (isRetryable && attempt < MAX_RETRIES) {
+						const delayMs = Math.min(1000 * Math.pow(2, attempt), 4000);
+						if (config.debugMode) {
+							logger?.log('AGENT', `API ${status} on attempt ${attempt + 1}, retrying in ${delayMs}ms`);
+						}
+						callbacks.onProgress({
+							type: 'tool_call',
+							message: `API ${status} — retrying in ${Math.round(delayMs / 1000)}s...`
+						});
+						await new Promise(resolve => setTimeout(resolve, delayMs));
+						continue;
+					}
+					throw reqError; // Not retryable or out of retries
+				}
+			}
 			const roundTokens = data.usage?.total_tokens ?? 0;
 			totalPromptTokens += data.usage?.prompt_tokens ?? 0;
 			totalCompletionTokens += data.usage?.completion_tokens ?? 0;
+			totalCachedTokens += data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
 			tokenPerRound.push(roundTokens);
 			totalTokens += roundTokens;
 			lastRoundTokens = roundTokens;
 
 			const choice = data.choices?.[0];
 			if (!choice) {
-				return buildResult(false, 'No response from API', editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, tokenPerRound, iteration);
+				return buildResult(false, 'No response from API', editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, totalCachedTokens, tokenPerRound, iteration);
 			}
 
 			const assistantMessage = choice.message;
@@ -214,10 +246,14 @@ export async function runAgent(
 					continue;
 				}
 
-				// Stuck detection
+				// Stuck detection: exact match (same tool + same args)
 				const callKey = `${fnName}:${fnArgsStr}`;
 				const callCount = (toolCallHistory.get(callKey) || 0) + 1;
 				toolCallHistory.set(callKey, callCount);
+
+				// Secondary signal: tool-name-only frequency (catches varied-args loops)
+				const nameCount = (toolNameFrequency.get(fnName) || 0) + 1;
+				toolNameFrequency.set(fnName, nameCount);
 
 				if (callCount >= 3) {
 					messages.push({
@@ -233,6 +269,16 @@ export async function runAgent(
 						});
 					}
 					continue;
+				}
+
+				// Name-only frequency check (different args each time, same tool)
+				if (nameCount >= TOOL_NAME_FREQUENCY_LIMIT && fnName !== 'edit_note' && fnName !== 'done') {
+					messages.push({
+						role: 'tool',
+						tool_call_id: toolCall.id,
+						content: `WARNING: You've called "${fnName}" ${nameCount} times this session (with varying arguments). This may indicate a loop. Consider using a different approach or calling done().`
+					});
+					// Don't skip — still execute the call, just warn
 				}
 
 				// Guard: reject disabled tools the API may hallucinate
@@ -258,7 +304,7 @@ export async function runAgent(
 				// Route tool call to appropriate handler
 				let toolResult: string;
 
-				if (['search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure', 'list_tags', 'get_manual_context', 'get_properties', 'get_file_info', 'find_dead_links', 'query_notes', 'get_vault_stats', 'get_chat_history'].includes(fnName)) {
+				if (vaultToolNames.has(fnName)) {
 					// Vault tools
 					toolResult = await handleVaultToolCall(fnName, fnArgs, callbacks);
 					// Track read notes
@@ -268,18 +314,48 @@ export async function runAgent(
 							actionState.notesRead.push(path);
 						}
 					}
-				} else if (['web_search', 'read_webpage'].includes(fnName)) {
+				} else if (webToolNames.has(fnName)) {
 					// Web tools
 					toolResult = await handleWebToolCall(fnName, fnArgs, callbacks, config.webSnippetLimit || 8);
-					// Track web sources
-					if (fnName === 'web_search') {
-						// Results are tracked implicitly in conversation
+					// Track web sources for AgentResult
+					if (fnName === 'web_search' && toolResult) {
+						// Parse formatted results: "N. Title\n   URL\n   Snippet"
+						const resultBlocks = toolResult.split(/\n\n/);
+						for (const block of resultBlocks) {
+							const lines = block.split('\n').map(l => l.trim());
+							const titleMatch = lines[0]?.match(/^\d+\.\s+(.+)/);
+							const url = lines[1] || '';
+							const snippet = lines[2] || '';
+							if (titleMatch && url.startsWith('http')) {
+								actionState.webSources.push({
+									url,
+									title: titleMatch[1],
+									summary: snippet
+								});
+							}
+						}
+					} else if (fnName === 'read_webpage' && fnArgs.url) {
+						const url = fnArgs.url as string;
+						// Extract title from "=== Title ===" format
+						const titleMatch = toolResult?.match(/^=== (.+?) ===/);
+						actionState.webSources.push({
+							url,
+							title: titleMatch ? titleMatch[1] : url,
+							summary: ''
+						});
 					}
 				} else if (customInfoToolNames.has(fnName)) {
-					// Custom info tools
+					// Custom info tools — truncate to prevent consuming entire token budget
+					const INFO_TOOL_CHAR_LIMIT = 32_000; // ~8K tokens
 					if (callbacks.resolveCustomInfoTool) {
 						const content = await callbacks.resolveCustomInfoTool(fnName);
-						toolResult = content ?? `Error: Could not resolve content for "${fnName}".`;
+						if (content == null) {
+							toolResult = `Error: Could not resolve content for "${fnName}".`;
+						} else if (content.length > INFO_TOOL_CHAR_LIMIT) {
+							toolResult = content.substring(0, INFO_TOOL_CHAR_LIMIT) + `\n\n[... truncated at ${INFO_TOOL_CHAR_LIMIT} characters — content too large for context]`;
+						} else {
+							toolResult = content;
+						}
 					} else {
 						toolResult = `Error: Custom info tool "${fnName}" is not available.`;
 					}
@@ -341,7 +417,7 @@ export async function runAgent(
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
 			logger?.error('AGENT', `API error on iteration ${iteration}`, { error: errorMsg });
-			return buildResult(false, `API error: ${errorMsg}`, editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, tokenPerRound, iteration);
+			return buildResult(false, `API error: ${errorMsg}`, editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, totalCachedTokens, tokenPerRound, iteration);
 		}
 	}
 
@@ -358,7 +434,7 @@ export async function runAgent(
 		detail: `${totalTokens.toLocaleString()} total tokens, ${tokenPerRound.length} rounds`
 	});
 
-	return buildResult(true, summary, editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, tokenPerRound, tokenPerRound.length);
+	return buildResult(true, summary, editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, totalCachedTokens, tokenPerRound, tokenPerRound.length);
 }
 
 // Helper: build result object
@@ -370,6 +446,7 @@ function buildResult(
 	totalTokens: number,
 	promptTokens: number,
 	completionTokens: number,
+	cachedTokens: number,
 	tokenPerRound: number[],
 	iterationsUsed: number
 ): AgentResult {
@@ -380,7 +457,7 @@ function buildResult(
 		notesRead: actionState.notesRead,
 		notesCopied: actionState.notesCopied,
 		webSourcesUsed: actionState.webSources,
-		tokenUsage: { total: totalTokens, promptTokens, completionTokens, perRound: tokenPerRound },
+		tokenUsage: { total: totalTokens, promptTokens, completionTokens, cachedTokens, perRound: tokenPerRound },
 		iterationsUsed,
 		error: success ? undefined : summary
 	};

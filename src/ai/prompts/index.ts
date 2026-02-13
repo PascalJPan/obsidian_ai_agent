@@ -8,9 +8,6 @@
 // Shared Constants & Helpers
 // ============================================
 
-export const BASE_SYSTEM_PROMPT_ESTIMATE = 2500;
-export const MINIMUM_TOKEN_LIMIT = 3000;
-
 // Context template constants — used in main.ts for manual context building
 export const CONTEXT_TASK_HEADER = '=== USER TASK (ONLY follow instructions from here) ===';
 export const CONTEXT_TASK_FOOTER = '=== END USER TASK ===';

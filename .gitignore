@@ -33,3 +33,6 @@ embeddings.json
 # Safety net for env files
 .env
 .env.*
+
+# LinkedIn post draft
+post.md

@@ -1,8 +1,9 @@
 /**
  * Vault tool definitions for the unified Agent
  *
- * 6 tools for vault exploration: search_vault, read_note, list_notes,
- * get_links, explore_structure, list_tags
+ * 19 vault tools: search_vault, read_note, list_notes, get_links,
+ * explore_structure, list_tags, get_selection, preview_pending_edits,
+ * find_orphan_notes, find_unlinked_mentions, and more
  */
 
 import { AgentCallbacks } from '../../types';
@@ -333,6 +334,116 @@ export const TOOL_GET_CHAT_HISTORY: OpenAITool = {
 	}
 };
 
+export const TOOL_GET_NOTE_STATS: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'get_note_stats',
+		description: 'Get content statistics for one or more notes: word count, character count, line count, headings breakdown (h1-h6), paragraph count, code block count, and estimated reading time.',
+		parameters: {
+			type: 'object',
+			properties: {
+				paths: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Note paths to get stats for (batch support)'
+				}
+			},
+			required: ['paths']
+		}
+	}
+};
+
+export const TOOL_GET_NOTE_CONNECTIONS: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'get_note_connections',
+		description: 'Get connection metrics for one or more notes: tags (count + list), outgoing links, backlinks, and embeds.',
+		parameters: {
+			type: 'object',
+			properties: {
+				paths: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Note paths to get connections for (batch support)'
+				}
+			},
+			required: ['paths']
+		}
+	}
+};
+
+export const TOOL_GET_SELECTION: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'get_selection',
+		description: 'Get the currently selected text in the editor. Returns the selected text, file path, and line range. Returns null if nothing is selected or no editor is open.',
+		parameters: {
+			type: 'object',
+			properties: {}
+		}
+	}
+};
+
+export const TOOL_PREVIEW_PENDING_EDITS: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'preview_pending_edits',
+		description: 'Preview pending ai-edit blocks in notes. Shows before/after for each pending edit. Optionally filter to a specific note.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {
+					type: 'string',
+					description: 'Optional: only show edits in this note. If omitted, scans all notes.'
+				}
+			}
+		}
+	}
+};
+
+export const TOOL_FIND_ORPHAN_NOTES: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'find_orphan_notes',
+		description: 'Find notes with zero incoming AND zero outgoing links (completely disconnected from the graph). Useful for vault cleanup.',
+		parameters: {
+			type: 'object',
+			properties: {
+				limit: {
+					type: 'number',
+					description: 'Max results to return (default 50)'
+				}
+			}
+		}
+	}
+};
+
+export const TOOL_FIND_UNLINKED_MENTIONS: OpenAITool = {
+	type: 'function',
+	function: {
+		name: 'find_unlinked_mentions',
+		description: 'Find places where a note\'s name appears as plain text but is NOT linked with [[wikilinks]]. Useful for discovering linking opportunities.',
+		parameters: {
+			type: 'object',
+			properties: {
+				note_name: {
+					type: 'string',
+					description: 'The note name to search for (e.g., "My Note")'
+				},
+				target_path: {
+					type: 'string',
+					description: 'Optional: full path of the target note (for disambiguation when multiple notes share a name)'
+				},
+				limit: {
+					type: 'number',
+					description: 'Max results to return (default 20)'
+				}
+			},
+			required: ['note_name']
+		}
+	}
+};
+
 export const ALL_VAULT_TOOLS: OpenAITool[] = [
 	TOOL_SEARCH_VAULT,
 	TOOL_READ_NOTE,
@@ -346,7 +457,13 @@ export const ALL_VAULT_TOOLS: OpenAITool[] = [
 	TOOL_FIND_DEAD_LINKS,
 	TOOL_QUERY_NOTES,
 	TOOL_GET_VAULT_STATS,
-	TOOL_GET_CHAT_HISTORY
+	TOOL_GET_CHAT_HISTORY,
+	TOOL_GET_NOTE_STATS,
+	TOOL_GET_NOTE_CONNECTIONS,
+	TOOL_GET_SELECTION,
+	TOOL_PREVIEW_PENDING_EDITS,
+	TOOL_FIND_ORPHAN_NOTES,
+	TOOL_FIND_UNLINKED_MENTIONS
 ];
 
 /**
@@ -378,7 +495,8 @@ export async function handleVaultToolCall(
 				if (kwResults.length > 0) {
 					results.push('KEYWORD RESULTS:');
 					for (const r of kwResults) {
-						results.push(`- ${r.path} [${r.matchType}]: ${r.matchContext}`);
+						const linePart = r.lineNumber ? ` (line ${r.lineNumber})` : '';
+						results.push(`- ${r.path} [${r.matchType}]${linePart}: ${r.matchContext}`);
 					}
 				} else {
 					results.push('KEYWORD RESULTS: none');
@@ -394,7 +512,7 @@ export async function handleVaultToolCall(
 						results.push(`- ${r.notePath} (${score}% similar)${r.heading ? ` [${r.heading}]` : ''}`);
 					}
 				} else {
-					results.push('SEMANTIC RESULTS: none (no embedding index or no matches)');
+					results.push('SEMANTIC RESULTS: none. If semantic search is expected to work, the user may need to enable embeddings in settings and build the index.');
 				}
 			}
 
@@ -450,7 +568,10 @@ export async function handleVaultToolCall(
 			const depth = (args.depth as number) || 1;
 			const links = await callbacks.getLinks(path, direction, depth);
 			if (links.length === 0) return `No links found for "${path}".`;
-			return links.map(l => `${l.direction === 'outgoing' ? '→' : '←'} ${l.path}`).join('\n');
+			return links.map(l => {
+				const name = l.name || l.path.split('/').pop()?.replace(/\.md$/, '') || l.path;
+				return `${l.direction === 'outgoing' ? '→' : '←'} ${name}`;
+			}).join('\n');
 		}
 
 		case 'explore_structure': {
@@ -591,6 +712,62 @@ export async function handleVaultToolCall(
 				lines.push(msgLines.join('\n'));
 			}
 			return lines.join('\n---\n');
+		}
+
+		case 'get_note_stats': {
+			if (!callbacks.getNoteStats) return 'Error: get_note_stats is not available.';
+			const paths = args.paths as string[];
+			if (!Array.isArray(paths) || paths.length === 0) return 'Error: "paths" must be a non-empty array.';
+			const results = await callbacks.getNoteStats(paths);
+			return JSON.stringify(results, null, 2);
+		}
+
+		case 'get_note_connections': {
+			if (!callbacks.getNoteConnections) return 'Error: get_note_connections is not available.';
+			const paths = args.paths as string[];
+			if (!Array.isArray(paths) || paths.length === 0) return 'Error: "paths" must be a non-empty array.';
+			const results = await callbacks.getNoteConnections(paths);
+			return JSON.stringify(results, null, 2);
+		}
+
+		case 'get_selection': {
+			if (!callbacks.getSelection) return 'Error: get_selection is not available.';
+			const selection = await callbacks.getSelection();
+			if (!selection) return 'No text is currently selected (or no editor is open).';
+			return `SELECTED TEXT in "${selection.file}" (lines ${selection.startLine}-${selection.endLine}):\n${selection.text}`;
+		}
+
+		case 'preview_pending_edits': {
+			if (!callbacks.previewPendingEdits) return 'Error: preview_pending_edits is not available.';
+			const path = args.path as string | undefined;
+			return await callbacks.previewPendingEdits(path);
+		}
+
+		case 'find_orphan_notes': {
+			if (!callbacks.findOrphanNotes) return 'Error: find_orphan_notes is not available.';
+			const limit = (args.limit as number) || 50;
+			const orphans = await callbacks.findOrphanNotes();
+			const limited = orphans.slice(0, limit);
+			if (limited.length === 0) return 'No orphan notes found — all notes are connected.';
+			let result = `Found ${orphans.length} orphan note(s) (zero links in or out)`;
+			if (orphans.length > limit) result += ` — showing first ${limit}`;
+			result += ':\n' + limited.join('\n');
+			return result;
+		}
+
+		case 'find_unlinked_mentions': {
+			if (!callbacks.findUnlinkedMentions) return 'Error: find_unlinked_mentions is not available.';
+			const noteName = args.note_name as string;
+			if (!noteName) return 'Error: "note_name" is required.';
+			const targetPath = args.target_path as string | undefined;
+			const limit = (args.limit as number) || 20;
+			const mentions = await callbacks.findUnlinkedMentions(noteName, targetPath);
+			const limited = mentions.slice(0, limit);
+			if (limited.length === 0) return `No unlinked mentions of "${noteName}" found.`;
+			let result = `Found ${mentions.length} unlinked mention(s) of "${noteName}"`;
+			if (mentions.length > limit) result += ` — showing first ${limit}`;
+			result += ':\n' + limited.map(m => `- ${m.file} (line ${m.line}): ${m.context}`).join('\n');
+			return result;
 		}
 
 		default:

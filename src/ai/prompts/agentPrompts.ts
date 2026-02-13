@@ -75,9 +75,20 @@ MANUAL CONTEXT: If the user says "based on my context", "use the context", "sele
 
 	// Output section — compact list of available actions
 	const disabledSet = new Set(config.disabledTools || []);
-	const allToolNames = ['edit_note', 'create_note', 'move_note', 'update_properties',
-		'add_tags', 'link_notes', 'copy_notes', 'open_note', 'append_to_note', 'search_and_replace',
-		'get_properties', 'get_file_info', 'find_dead_links', 'query_notes', 'get_vault_stats', 'delete_note'];
+	const allToolNames = [
+		// Vault tools
+		'search_vault', 'read_note', 'list_notes', 'get_links', 'explore_structure',
+		'list_tags', 'get_manual_context', 'get_chat_history', 'get_selection',
+		'get_properties', 'get_file_info', 'find_dead_links', 'query_notes',
+		'get_vault_stats', 'get_note_stats', 'get_note_connections',
+		'preview_pending_edits', 'find_orphan_notes', 'find_unlinked_mentions',
+		// Web tools (conditional)
+		...(config.webEnabled ? ['web_search', 'read_webpage'] : []),
+		// Action tools
+		'edit_note', 'create_note', 'move_note', 'update_properties',
+		'add_tags', 'link_notes', 'copy_notes', 'open_note', 'append_to_note',
+		'search_and_replace', 'delete_note'
+	];
 	if (config.whitelistedCommands?.length > 0) allToolNames.push('execute_command');
 	const activeTools = allToolNames.filter(t => !disabledSet.has(t));
 
@@ -97,6 +108,12 @@ Call multiple tools in one turn for efficiency.`);
 			get_properties: 'reading frontmatter', get_file_info: 'checking file metadata',
 			find_dead_links: 'finding broken links', query_notes: 'querying notes by properties',
 			get_vault_stats: 'vault statistics overview',
+			get_note_stats: 'per-note content statistics (word count, headings, etc.)',
+			get_note_connections: 'per-note connection metrics (tags, links, backlinks, embeds)',
+			get_selection: 'reading editor selection',
+			preview_pending_edits: 'previewing pending edits',
+			find_orphan_notes: 'finding orphan notes',
+			find_unlinked_mentions: 'finding unlinked mentions',
 			web_search: 'web searching', read_webpage: 'reading web pages',
 			edit_note: 'editing notes', create_note: 'creating notes', open_note: 'opening notes in tabs',
 			move_note: 'moving/renaming notes', update_properties: 'updating frontmatter',
@@ -164,10 +181,12 @@ export function buildAgentInitialMessage(input: AgentInput): string {
 	parts.push(`USER TASK: ${input.task}`);
 
 	if (input.currentFile) {
+		const lastSlash = input.currentFile.path.lastIndexOf('/');
+		const folder = lastSlash >= 0 ? input.currentFile.path.substring(0, lastSlash + 1) : '(vault root)';
 		const preview = input.currentFile.content.length > 4000
 			? input.currentFile.content.substring(0, 4000) + '\n[... truncated]'
 			: input.currentFile.content;
-		parts.push(`\nCURRENT NOTE (${input.currentFile.path}):\n${preview}`);
+		parts.push(`\nCURRENT NOTE: ${input.currentFile.path}\nFOLDER: ${folder}\n${preview}`);
 	} else {
 		parts.push('\nNo note is currently open.');
 	}

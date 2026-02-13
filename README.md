@@ -15,11 +15,11 @@ Think of it as a collaborator that:
 
 ## How It Works
 
-ObsidianAgent runs a single unified agent with a **ReAct loop** (Think → Act → Observe). Instead of a rigid pipeline, one agent autonomously decides what to do at each step—exploring your vault, searching the web, and taking actions—all in one adaptive loop. This replaces the previous 3-phase pipeline (Scout → Web → Task) with a single, more flexible agent.
+ObsidianAgent runs a single unified agent with a **ReAct loop** (Think → Act → Observe). Instead of a rigid pipeline, one agent autonomously decides what to do at each step—exploring your vault, searching the web, and taking actions—all in one adaptive loop. 
 
-The agent has **29 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
+The agent has **35 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
 
-**Vault Tools (13)** — explore and understand your vault
+**Vault Tools (19)** — explore and understand your vault
 - `search_vault` — keyword, semantic, or combined search
 - `read_note` — read a note's full content with line numbers
 - `list_notes` — browse notes in a folder
@@ -33,6 +33,12 @@ The agent has **29 built-in tools** across 3 categories, plus user-defined **Cus
 - `query_notes` — advanced note filtering with sorting
 - `get_vault_stats` — vault-wide statistics (note count, tags, orphans, etc.)
 - `get_chat_history` — retrieve full details of previous conversation rounds
+- `get_note_stats` — word count, reading time, and heading structure
+- `get_note_connections` — combined links, backlinks, and shared-tag neighbors
+- `get_selection` — get the user's current text selection
+- `preview_pending_edits` — list unresolved pending edit blocks
+- `find_orphan_notes` — find notes with no incoming or outgoing links
+- `find_unlinked_mentions` — find text mentions that could be wikilinks
 
 **Web Tools (2)** — search beyond your vault
 - `web_search` — search the internet (OpenAI, Serper, Brave, or Tavily)
@@ -147,7 +153,7 @@ src/
   ai/
     agent.ts         - Unified Agent ReAct loop engine
     tools/
-      vaultTools.ts  - 13 vault exploration tools
+      vaultTools.ts  - 19 vault exploration tools
       webTools.ts    - 2 web search tools
       actionTools.ts - 14 action tools
     prompts/
