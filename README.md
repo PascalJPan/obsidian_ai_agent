@@ -17,9 +17,9 @@ Think of it as a collaborator that:
 
 ObsidianAgent runs a single unified agent with a **ReAct loop** (Think → Act → Observe). Instead of a rigid pipeline, one agent autonomously decides what to do at each step—exploring your vault, searching the web, and taking actions—all in one adaptive loop. This replaces the previous 3-phase pipeline (Scout → Web → Task) with a single, more flexible agent.
 
-The agent has **25 tools** across 3 categories:
+The agent has **29 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
 
-**Vault Tools (11)** — explore and understand your vault
+**Vault Tools (13)** — explore and understand your vault
 - `search_vault` — keyword, semantic, or combined search
 - `read_note` — read a note's full content with line numbers
 - `list_notes` — browse notes in a folder
@@ -31,24 +31,30 @@ The agent has **25 tools** across 3 categories:
 - `get_file_info` — get file metadata (size, dates, etc.)
 - `find_dead_links` — detect broken wikilinks
 - `query_notes` — advanced note filtering with sorting
+- `get_vault_stats` — vault-wide statistics (note count, tags, orphans, etc.)
+- `get_chat_history` — retrieve full details of previous conversation rounds
 
 **Web Tools (2)** — search beyond your vault
 - `web_search` — search the internet (OpenAI, Serper, Brave, or Tavily)
 - `read_webpage` — fetch and extract content from a URL
 
-**Action Tools (12)** — make changes and interact
+**Action Tools (14)** — make changes and interact
 - `edit_note` — propose line-level edits (insert, replace, delete)
 - `create_note` — create a new note
 - `open_note` — open a note in a new tab
-- `move_note` — move or rename a note
-- `update_properties` — modify YAML frontmatter
-- `add_tags` — add tags to a note
-- `link_notes` — insert a wikilink between notes
+- `move_note` — move or rename a note (reviewable with undo)
+- `update_properties` — modify YAML frontmatter (reviewable with undo)
+- `add_tags` — add tags to a note (reviewable with undo)
+- `link_notes` — propose a wikilink between notes (pending edit)
 - `copy_notes` — collect note contents for clipboard
 - `delete_note` — propose note deletion (requires user confirmation)
 - `execute_command` — run whitelisted Obsidian commands
+- `append_to_note` — append content to the end of a note
+- `search_and_replace` — find and replace text across notes (pending edits)
 - `ask_user` — ask a clarifying question
 - `done` — finish and deliver results
+
+**Custom Info Tools (0+)** — user-defined zero-parameter tools that return reference content on demand (e.g., plugin syntax docs, style guides). Ships with a built-in **Dataview Reference** tool.
 
 **Safety guardrails:**
 - Hard iteration cap (5-20 rounds, default 10)
@@ -73,10 +79,12 @@ If you prefer to choose context yourself, you can configure it manually:
 - Whitelist specific Obsidian commands the agent can execute
 - **Hard enforcement**: Rules are validated after the AI responds, not just suggested via prompts
 
-**Safe Deletions**
-- When the agent requests to delete a note, a confirmation bubble appears in the chat
-- You must explicitly click "Delete" to confirm — clicking "Keep" cancels the operation
-- No note is ever trashed without your approval
+**Reviewable Actions**
+- **Deletions**: Confirmation bubble with "Keep" / "Delete" — no note is trashed without your approval
+- **Moves & renames**: Applied immediately, but an "Undo" / "Keep" bubble lets you revert
+- **Property updates**: Previous values are snapshotted — undo restores them
+- **Tag additions**: Previous tags are snapshotted — undo restores the original set
+- **Link insertions**: Routed through the pending edit system (inline accept/reject in the note)
 
 **Smart Token Management**
 - Set a token limit for context sent to the AI
@@ -85,7 +93,8 @@ If you prefer to choose context yourself, you can configure it manually:
 - Notification when notes are removed from context
 
 **Model Selection**
-- Choose your preferred OpenAI model (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, o1, etc.)
+- Choose your preferred OpenAI model (gpt-5-mini, gpt-5-nano, gpt-5, gpt-4o, etc.)
+- Custom model pricing: override default $/1M token rates for any model in settings
 - Balance cost, speed, and capability for your workflow
 
 **Conversation Memory**
@@ -138,9 +147,9 @@ src/
   ai/
     agent.ts         - Unified Agent ReAct loop engine
     tools/
-      vaultTools.ts  - 11 vault exploration tools
+      vaultTools.ts  - 13 vault exploration tools
       webTools.ts    - 2 web search tools
-      actionTools.ts - 12 action tools
+      actionTools.ts - 14 action tools
     prompts/
       agentPrompts.ts - Agent system prompt builder
       taskPrompts.ts  - Edit rules, scope, position types
@@ -156,6 +165,8 @@ src/
     diff.ts          - Diff utilities
   modals/
     index.ts         - Modal components
+  defaults/
+    dataviewReference.ts - Built-in Dataview Reference info tool
   utils/
     logger.ts        - Structured logging
     fileUtils.ts     - File exclusion utilities

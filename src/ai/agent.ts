@@ -113,7 +113,7 @@ export async function runAgent(
 
 		// Determine tools for this iteration
 		const isLastIteration = iteration === config.maxIterations;
-		const isBudgetExceeded = lastRoundTokens >= config.maxTotalTokens;
+		const isBudgetExceeded = totalTokens >= config.maxTotalTokens;
 		const shouldFinalize = isLastIteration || isBudgetExceeded;
 
 		let currentTools: OpenAITool[];

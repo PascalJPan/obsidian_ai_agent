@@ -55,6 +55,7 @@ A single agent with a ReAct (Think → Act → Observe) loop explores the vault,
 - `disabledTools`: Tools turned off by user
 - `whitelistedCommands`: Commands the agent can execute
 - `customInfoTools`: User-defined knowledge tools (see CustomInfoTool below)
+- `customModelPricing`: User overrides for model pricing rates ($/1M tokens, sparse — only edited models stored)
 - `excludedTag`: Tag that marks notes as private (default: `"private"`)
 - Web search API settings (openai, serper, brave, tavily)
 - Edit rules (scope, capabilities)
@@ -151,7 +152,10 @@ interface AgentResult {
 - `showUserClarificationUI()` — Promise-based UI for `ask_user` tool
 - `showAgentProgress()` — real-time progress display during agent execution
 - `completeAgentProgressFromResult()` — renders detail sections (notes, web, edits) in the progress container
-- `renderPendingDeletionBubble()` — confirmation UI for `delete_note` (Accept/Reject)
+- `renderPendingDeletionBubble()` — confirmation UI for `delete_note` (Keep/Delete)
+- `renderPendingMoveBubble()` — undo/keep UI for `move_note`
+- `renderPendingPropertiesBubble()` — undo/keep UI for `update_properties`
+- `renderPendingTagsBubble()` — undo/keep UI for `add_tags`
 - `renderCopyNotesBubble()` — copy-to-clipboard UI for `copy_notes`
 
 ### src/ai/agent.ts
@@ -193,9 +197,15 @@ Edit blocks are stored as fenced code blocks in notes:
 
 Users see a widget with Accept/Reject buttons. The tag (`#ai_edit`) enables searchability.
 
-## Deletion Confirmation
+## Action Confirmation / Undo System
 
-When the agent calls `delete_note`, the file is NOT immediately trashed. Instead a confirmation bubble appears in the chat with "Keep" and "Delete" buttons. The file is only moved to `.trash` when the user clicks Delete.
+Several action tools produce reviewable confirmation bubbles in the chat:
+
+- **`delete_note`**: "Keep" / "Delete" buttons. File is only moved to `.trash` when the user clicks Delete.
+- **`move_note`**: "Keep" / "Undo" buttons. Move is applied immediately; Undo reverts the rename (restoring original folder if needed).
+- **`update_properties`**: "Keep" / "Undo" buttons. Previous property values are snapshotted before applying; Undo restores them.
+- **`add_tags`**: "Keep" / "Undo" buttons. Previous tags array is snapshotted; Undo restores the original tags.
+- **`link_notes`**: Now routes through the pending edit system (inline accept/reject widget in the note) instead of writing directly.
 
 ## Chat UX
 
@@ -230,7 +240,7 @@ src/
     validation.ts    - Edit validation (computeNewContent, determineEditType)
     searchApi.ts     - Web search wrapper (OpenAI, Serper, Brave, Tavily)
     semantic.ts      - Embedding generation and semantic search
-    pricing.ts       - Token usage formatting
+    pricing.ts       - Token usage formatting (supports custom pricing overrides)
   edits/
     editManager.ts   - Edit lifecycle management (create/resolve/batch)
     diff.ts          - Diff utilities (computeDiff, LCS)

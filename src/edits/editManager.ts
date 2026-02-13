@@ -247,14 +247,14 @@ export class EditManager {
 		// Build regex patterns to find the edit block
 		// Pattern 1: Exact JSON match
 		const exactBlockRegex = new RegExp(
-			'\\n?```ai-edit\\n' + escapeRegex(JSON.stringify(edit)) + '\\n```\\n?' +
+			'(\\n?)```ai-edit\\n' + escapeRegex(JSON.stringify(edit)) + '\\n```\\n?' +
 			escapeRegex(this.deps.getPendingEditTag()) + '\\n?',
 			'g'
 		);
 
 		// Pattern 2: Match by edit ID (more flexible for whitespace variations)
 		const idBlockRegex = new RegExp(
-			'\\n?```ai-edit\\n[^`]*?"id"\\s*:\\s*"' + escapeRegex(edit.id) + '"[^`]*?```\\n?' +
+			'(\\n?)```ai-edit\\n[^`]*?"id"\\s*:\\s*"' + escapeRegex(edit.id) + '"[^`]*?```\\n?' +
 			escapeRegex(this.deps.getPendingEditTag()) + '\\n?',
 			'g'
 		);
@@ -272,11 +272,15 @@ export class EditManager {
 
 		// Try exact pattern first, then fallback to ID-based pattern
 		const originalContent = content;
-		content = content.replace(exactBlockRegex, finalReplacement);
+		content = content.replace(exactBlockRegex, (_match: string, leadingNewline: string) => {
+			return leadingNewline + finalReplacement;
+		});
 
 		// If exact pattern didn't match, try ID-based pattern
 		if (content === originalContent) {
-			content = content.replace(idBlockRegex, finalReplacement);
+			content = content.replace(idBlockRegex, (_match: string, leadingNewline: string) => {
+				return leadingNewline + finalReplacement;
+			});
 		}
 
 		// Clean up multiple consecutive newlines (more than 2) to at most 2

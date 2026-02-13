@@ -2124,6 +2124,152 @@ button:disabled {
 }
 
 /* ===================================
+   Pending Action Bubbles (Move, Properties, Tags)
+   =================================== */
+
+.ai-pending-action-bubble {
+	background: var(--background-secondary);
+	border: 1px solid var(--interactive-accent);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 8px;
+	padding: 12px 16px;
+	margin: 8px 0;
+	max-width: 85%;
+	align-self: flex-start;
+}
+
+.ai-pending-action-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.ai-pending-action-icon {
+	font-size: 1.3em;
+	flex-shrink: 0;
+}
+
+.ai-pending-action-info {
+	flex: 1;
+	min-width: 0;
+}
+
+.ai-pending-action-title {
+	font-weight: 500;
+	font-size: 0.95em;
+	color: var(--text-normal);
+}
+
+.ai-pending-action-detail {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-top: 4px;
+	word-break: break-all;
+}
+
+.ai-pending-action-old {
+	text-decoration: line-through;
+	color: var(--text-faint);
+}
+
+.ai-pending-action-new {
+	color: var(--text-normal);
+	font-weight: 500;
+}
+
+.ai-pending-action-removed {
+	color: var(--text-error);
+	font-style: italic;
+}
+
+.ai-pending-action-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+	justify-content: flex-end;
+}
+
+.ai-pending-action-keep {
+	background: rgba(100, 200, 100, 0.15);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	padding: 5px 14px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 0.85em;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.ai-pending-action-keep:hover {
+	background: rgba(100, 200, 100, 0.3);
+}
+
+.ai-pending-action-undo {
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--background-modifier-border);
+	padding: 5px 14px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 0.85em;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.ai-pending-action-undo:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ai-pending-action-keep:disabled,
+.ai-pending-action-undo:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.ai-pending-action-resolved {
+	border-color: var(--background-modifier-border);
+	border-left-width: 1px;
+}
+
+.ai-pending-action-result {
+	font-size: 0.9em;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* Property diff rows */
+.ai-pending-prop-row {
+	display: flex;
+	gap: 6px;
+	align-items: baseline;
+	margin-top: 2px;
+}
+
+.ai-pending-prop-key {
+	font-weight: 500;
+	color: var(--text-muted);
+}
+
+/* Tag chips */
+.ai-pending-tags-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.ai-pending-tag-chip {
+	display: inline-block;
+	background: rgba(100, 200, 100, 0.15);
+	color: var(--text-normal);
+	padding: 2px 8px;
+	border-radius: 10px;
+	font-size: 0.85em;
+	font-weight: 500;
+}
+
+/* ===================================
    Tool Toggle Pills (Settings)
    =================================== */
 
@@ -2434,4 +2580,74 @@ button:disabled {
 
 .ai-custom-info-modal-note-row .ai-custom-info-modal-input {
 	flex: 1;
+}
+
+/* ============================================
+   Model Pricing Table (Settings)
+   ============================================ */
+
+.ai-pricing-table-wrapper {
+	margin-top: 4px;
+}
+
+.ai-pricing-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.85em;
+	margin-bottom: 10px;
+}
+
+.ai-pricing-table th {
+	text-align: left;
+	font-weight: 600;
+	font-size: 0.8em;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+	padding: 4px 6px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ai-pricing-table td {
+	padding: 3px 6px;
+}
+
+.ai-pricing-model-name {
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+	color: var(--text-normal);
+	white-space: nowrap;
+}
+
+.ai-pricing-input {
+	width: 80px;
+	padding: 3px 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+	text-align: right;
+}
+
+.ai-pricing-input:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+.ai-pricing-reset-btn {
+	font-size: 0.8em;
+	padding: 4px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.ai-pricing-reset-btn:hover {
+	border-color: var(--interactive-accent);
+	color: var(--text-normal);
 }

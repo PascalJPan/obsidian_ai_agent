@@ -66,7 +66,7 @@ import {
 } from './src/ai/prompts';
 import { addLineNumbers, stripPendingEditBlocks } from './src/ai/context';
 import { computeNewContent } from './src/ai/validation';
-import { formatTokenUsage } from './src/ai/pricing';
+import { formatTokenUsage, MODEL_PRICING } from './src/ai/pricing';
 import { webSearch, fetchPage } from './src/ai/searchApi';
 import { isFileExcluded, isFolderExcluded } from './src/utils/fileUtils';
 import { createLogger, summarizeSet, Logger } from './src/utils/logger';
@@ -94,6 +94,7 @@ interface MyPluginSettings {
 	debugMode: boolean;             // Log prompts and responses to console
 	clearChatOnNoteSwitch: boolean; // Clear chat history when switching notes
 	showTokenUsage: boolean;        // Show token count and cost estimate in chat
+	customModelPricing: Record<string, { input: number; output: number }>; // User overrides for $/1M token rates
 	// Semantic search settings
 	embeddingModel: 'text-embedding-3-small' | 'text-embedding-3-large';
 	// Agent settings
@@ -137,6 +138,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	debugMode: false,
 	clearChatOnNoteSwitch: false,
 	showTokenUsage: false,
+	customModelPricing: {},
 	embeddingModel: 'text-embedding-3-small',
 	// Agent settings
 	agentMaxIterations: 10,
@@ -2390,7 +2392,7 @@ class AIAssistantView extends ItemView {
 			// Add token usage footer if available and enabled
 			if (message.tokenUsage && this.plugin.settings.showTokenUsage) {
 				const usageEl = bubbleEl.createDiv({ cls: 'ai-chat-token-usage' });
-				usageEl.setText('Tokens: ' + formatTokenUsage(message.tokenUsage, message.model || this.plugin.settings.aiModel));
+				usageEl.setText('Tokens: ' + formatTokenUsage(message.tokenUsage, message.model || this.plugin.settings.aiModel, this.plugin.settings.customModelPricing));
 			}
 		} else {
 			// Wrap user text in a span so it's selectable in Electron
@@ -3160,7 +3162,10 @@ class AIAssistantView extends ItemView {
 					if (targetFolder && !app.vault.getAbstractFileByPath(targetFolder)) {
 						await app.vault.createFolder(targetFolder);
 					}
+					const originalPath = f.path;
 					await app.fileManager.renameFile(f, to);
+					// Show review bubble (f reference updates in-place after rename)
+					view.renderPendingMoveBubble(originalPath, to, f);
 					return { success: true, newPath: to };
 				} catch (e) {
 					return { success: false, error: (e as Error).message };
@@ -3176,12 +3181,21 @@ class AIAssistantView extends ItemView {
 					return { success: false, error: `Note not found: ${path}` };
 				}
 				try {
+					// Snapshot previous values before applying changes
+					const cache = app.metadataCache.getFileCache(f);
+					const previousValues: Record<string, unknown> = {};
+					for (const key of Object.keys(props)) {
+						previousValues[key] = cache?.frontmatter?.[key] ?? null;
+					}
+
 					await app.fileManager.processFrontMatter(f, (fm) => {
 						for (const [key, value] of Object.entries(props)) {
 							if (value === null) delete fm[key];
 							else fm[key] = value;
 						}
 					});
+					// Show review bubble
+					view.renderPendingPropertiesBubble(f, props, previousValues);
 					return { success: true };
 				} catch (e) {
 					return { success: false, error: (e as Error).message };
@@ -3197,12 +3211,21 @@ class AIAssistantView extends ItemView {
 					return { success: false, error: `Note not found: ${path}` };
 				}
 				try {
+					// Snapshot previous tags before applying changes
+					const cache = app.metadataCache.getFileCache(f);
+					const previousTags: string[] = cache?.frontmatter?.tags
+						? (Array.isArray(cache.frontmatter.tags) ? [...cache.frontmatter.tags] : [cache.frontmatter.tags])
+						: [];
+
 					await app.fileManager.processFrontMatter(f, (fm) => {
 						const existing = fm.tags || [];
 						const currentTags = Array.isArray(existing) ? existing : [existing];
 						const normalizedNew = tags.map(t => t.replace(/^#/, ''));
 						fm.tags = [...new Set([...currentTags, ...normalizedNew])];
 					});
+					// Show review bubble
+					const normalizedNew = tags.map(t => t.replace(/^#/, ''));
+					view.renderPendingTagsBubble(f, normalizedNew, previousTags);
 					return { success: true };
 				} catch (e) {
 					return { success: false, error: (e as Error).message };
@@ -3218,28 +3241,38 @@ class AIAssistantView extends ItemView {
 					return { success: false, error: `Source note not found: ${source}` };
 				}
 				try {
-					let content = await app.vault.read(sourceFile);
 					const linkTarget = target.replace(/\.md$/, '');
 					const wikilink = `[[${linkTarget}]]`;
 
+					// Determine position for the edit
+					let position = 'end';
 					if (context) {
-						const headingIdx = content.indexOf(context);
+						const content = await app.vault.read(sourceFile);
+						const lines = content.split('\n');
+						const headingIdx = lines.findIndex(l => l.trim() === context.trim());
 						if (headingIdx !== -1) {
-							const nextLineIdx = content.indexOf('\n', headingIdx);
-							if (nextLineIdx !== -1) {
-								content = content.substring(0, nextLineIdx + 1) + wikilink + '\n' + content.substring(nextLineIdx + 1);
-							} else {
-								content += '\n' + wikilink;
-							}
-						} else {
-							content += '\n\n' + wikilink;
+							position = `insert:${headingIdx + 2}`;
 						}
-					} else {
-						content += '\n\n' + wikilink;
 					}
 
-					await app.vault.modify(sourceFile, content);
-					return { success: true };
+					// Route through edit system for inline accept/reject widget
+					const edit: EditInstruction = { file: source, position, content: wikilink };
+					const validated = await plugin.validateEdits([edit]);
+					if (validated[0]?.error) {
+						return { success: false, error: validated[0].error };
+					}
+					const activeFile = app.workspace.getActiveFile();
+					if (activeFile) {
+						plugin.filterEditsByRulesWithConfig(
+							validated, activeFile, view.editableScope,
+							view.capabilities, view.contextScopeConfig
+						);
+					}
+					if (validated[0]?.error) {
+						return { success: false, error: validated[0].error };
+					}
+					const result = await plugin.insertEditBlocks(validated);
+					return { success: result.success > 0, error: result.failed > 0 ? 'Some edits failed' : undefined };
 				} catch (e) {
 					return { success: false, error: (e as Error).message };
 				}
@@ -3785,6 +3818,182 @@ ${recent || 'none'}`;
 		this.scrollChatToBottom();
 	}
 
+	// Render a pending move confirmation bubble in the chat
+	renderPendingMoveBubble(originalPath: string, newPath: string, file: TFile) {
+		if (!this.chatContainer) return;
+
+		const bubble = this.chatContainer.createDiv({ cls: 'ai-pending-action-bubble ai-pending-move' });
+
+		// Header
+		const header = bubble.createDiv({ cls: 'ai-pending-action-header' });
+		header.createSpan({ cls: 'ai-pending-action-icon', text: '\uD83D\uDCC1' });
+		const info = header.createDiv({ cls: 'ai-pending-action-info' });
+		info.createDiv({ cls: 'ai-pending-action-title', text: 'Moved Note' });
+
+		// Path diff
+		const pathDiff = info.createDiv({ cls: 'ai-pending-action-detail' });
+		pathDiff.createEl('span', { cls: 'ai-pending-action-old', text: originalPath });
+		pathDiff.createSpan({ text: ' \u2192 ' });
+		pathDiff.createEl('span', { cls: 'ai-pending-action-new', text: newPath });
+
+		// Buttons
+		const actions = bubble.createDiv({ cls: 'ai-pending-action-actions' });
+		const undoBtn = actions.createEl('button', { cls: 'ai-pending-action-undo', text: 'Undo' });
+		const keepBtn = actions.createEl('button', { cls: 'ai-pending-action-keep', text: 'Keep' });
+
+		keepBtn.addEventListener('click', () => {
+			keepBtn.disabled = true;
+			undoBtn.disabled = true;
+			bubble.empty();
+			bubble.addClass('ai-pending-action-resolved');
+			bubble.createSpan({ cls: 'ai-pending-action-result', text: `\uD83D\uDCC1 Move kept: ${newPath}` });
+		});
+
+		undoBtn.addEventListener('click', async () => {
+			keepBtn.disabled = true;
+			undoBtn.disabled = true;
+			try {
+				const originalFolder = originalPath.substring(0, originalPath.lastIndexOf('/'));
+				if (originalFolder && !this.app.vault.getAbstractFileByPath(originalFolder)) {
+					await this.app.vault.createFolder(originalFolder);
+				}
+				await this.app.fileManager.renameFile(file, originalPath);
+				bubble.empty();
+				bubble.addClass('ai-pending-action-resolved');
+				bubble.createSpan({ cls: 'ai-pending-action-result', text: `\u21A9\uFE0F Move reverted: ${originalPath}` });
+				new Notice(`Move reverted: "${file.basename}"`);
+			} catch (e) {
+				new Notice(`Failed to undo move: ${(e as Error).message}`);
+				keepBtn.disabled = false;
+				undoBtn.disabled = false;
+			}
+		});
+
+		this.scrollChatToBottom();
+	}
+
+	// Render a pending properties update bubble in the chat
+	renderPendingPropertiesBubble(file: TFile, appliedProps: Record<string, unknown>, previousValues: Record<string, unknown>) {
+		if (!this.chatContainer) return;
+
+		const bubble = this.chatContainer.createDiv({ cls: 'ai-pending-action-bubble ai-pending-properties' });
+
+		// Header
+		const header = bubble.createDiv({ cls: 'ai-pending-action-header' });
+		header.createSpan({ cls: 'ai-pending-action-icon', text: '\u2699\uFE0F' });
+		const info = header.createDiv({ cls: 'ai-pending-action-info' });
+		info.createDiv({ cls: 'ai-pending-action-title', text: `Properties Updated \u2014 ${file.basename}` });
+
+		// Property diff rows
+		const diffContainer = info.createDiv({ cls: 'ai-pending-action-detail' });
+		for (const [key, newVal] of Object.entries(appliedProps)) {
+			const oldVal = previousValues[key];
+			const row = diffContainer.createDiv({ cls: 'ai-pending-prop-row' });
+			row.createSpan({ cls: 'ai-pending-prop-key', text: key + ':' });
+			if (oldVal !== null && oldVal !== undefined) {
+				row.createSpan({ cls: 'ai-pending-action-old', text: String(oldVal) });
+				row.createSpan({ text: ' \u2192 ' });
+			}
+			if (newVal === null) {
+				row.createSpan({ cls: 'ai-pending-action-removed', text: 'removed' });
+			} else {
+				row.createSpan({ cls: 'ai-pending-action-new', text: String(newVal) });
+			}
+		}
+
+		// Buttons
+		const actions = bubble.createDiv({ cls: 'ai-pending-action-actions' });
+		const undoBtn = actions.createEl('button', { cls: 'ai-pending-action-undo', text: 'Undo' });
+		const keepBtn = actions.createEl('button', { cls: 'ai-pending-action-keep', text: 'Keep' });
+
+		keepBtn.addEventListener('click', () => {
+			keepBtn.disabled = true;
+			undoBtn.disabled = true;
+			bubble.empty();
+			bubble.addClass('ai-pending-action-resolved');
+			bubble.createSpan({ cls: 'ai-pending-action-result', text: `\u2699\uFE0F Changes kept: ${file.basename}` });
+		});
+
+		undoBtn.addEventListener('click', async () => {
+			keepBtn.disabled = true;
+			undoBtn.disabled = true;
+			try {
+				await this.app.fileManager.processFrontMatter(file, (fm) => {
+					for (const [key, oldVal] of Object.entries(previousValues)) {
+						if (oldVal === null || oldVal === undefined) {
+							delete fm[key];
+						} else {
+							fm[key] = oldVal;
+						}
+					}
+				});
+				bubble.empty();
+				bubble.addClass('ai-pending-action-resolved');
+				bubble.createSpan({ cls: 'ai-pending-action-result', text: `\u21A9\uFE0F Properties reverted: ${file.basename}` });
+				new Notice(`Properties reverted: "${file.basename}"`);
+			} catch (e) {
+				new Notice(`Failed to undo properties: ${(e as Error).message}`);
+				keepBtn.disabled = false;
+				undoBtn.disabled = false;
+			}
+		});
+
+		this.scrollChatToBottom();
+	}
+
+	// Render a pending tags addition bubble in the chat
+	renderPendingTagsBubble(file: TFile, addedTags: string[], previousTags: string[]) {
+		if (!this.chatContainer) return;
+
+		const bubble = this.chatContainer.createDiv({ cls: 'ai-pending-action-bubble ai-pending-tags' });
+
+		// Header
+		const header = bubble.createDiv({ cls: 'ai-pending-action-header' });
+		header.createSpan({ cls: 'ai-pending-action-icon', text: '\uD83C\uDFF7\uFE0F' });
+		const info = header.createDiv({ cls: 'ai-pending-action-info' });
+		info.createDiv({ cls: 'ai-pending-action-title', text: `Tags Added \u2014 ${file.basename}` });
+
+		// Tag chips
+		const tagsContainer = info.createDiv({ cls: 'ai-pending-action-detail ai-pending-tags-list' });
+		for (const tag of addedTags) {
+			tagsContainer.createSpan({ cls: 'ai-pending-tag-chip', text: `+${tag}` });
+		}
+
+		// Buttons
+		const actions = bubble.createDiv({ cls: 'ai-pending-action-actions' });
+		const undoBtn = actions.createEl('button', { cls: 'ai-pending-action-undo', text: 'Undo' });
+		const keepBtn = actions.createEl('button', { cls: 'ai-pending-action-keep', text: 'Keep' });
+
+		keepBtn.addEventListener('click', () => {
+			keepBtn.disabled = true;
+			undoBtn.disabled = true;
+			bubble.empty();
+			bubble.addClass('ai-pending-action-resolved');
+			bubble.createSpan({ cls: 'ai-pending-action-result', text: `\uD83C\uDFF7\uFE0F Tags kept: ${file.basename}` });
+		});
+
+		undoBtn.addEventListener('click', async () => {
+			keepBtn.disabled = true;
+			undoBtn.disabled = true;
+			try {
+				await this.app.fileManager.processFrontMatter(file, (fm) => {
+					fm.tags = previousTags.length > 0 ? [...previousTags] : undefined;
+					if (fm.tags === undefined) delete fm.tags;
+				});
+				bubble.empty();
+				bubble.addClass('ai-pending-action-resolved');
+				bubble.createSpan({ cls: 'ai-pending-action-result', text: `\u21A9\uFE0F Tags reverted: ${file.basename}` });
+				new Notice(`Tags reverted: "${file.basename}"`);
+			} catch (e) {
+				new Notice(`Failed to undo tags: ${(e as Error).message}`);
+				keepBtn.disabled = false;
+				undoBtn.disabled = false;
+			}
+		});
+
+		this.scrollChatToBottom();
+	}
+
 	// Render a copy notes bubble in the chat
 	private renderCopyNotesBubble(paths: string[], content: string) {
 		if (!this.chatContainer) return;
@@ -4215,6 +4424,32 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		containerEl.createEl('h3', { text: 'Token & Display' });
 
 		new Setting(containerEl)
+			.setName('Max Iterations')
+			.setDesc('Maximum think-act-observe rounds the agent can take (5-20)')
+			.addSlider(slider => slider
+				.setLimits(5, 20, 1)
+				.setValue(this.plugin.settings.agentMaxIterations)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.agentMaxIterations = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Total Token Budget')
+			.setDesc('Maximum total tokens across all rounds (20000-500000)')
+			.addSlider(slider => slider
+				.setLimits(20000, 500000, 10000)
+				.setValue(this.plugin.settings.agentMaxTokens)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.agentMaxTokens = value;
+					await this.plugin.saveSettings();
+				}));
+
+		const tokenTogglePricingContainer = containerEl.createDiv();
+
+		new Setting(tokenTogglePricingContainer)
 			.setName('Show token usage & cost estimate')
 			.setDesc('Display token count and estimated cost below each AI response.')
 			.addToggle(toggle => toggle
@@ -4222,7 +4457,76 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.showTokenUsage = value;
 					await this.plugin.saveSettings();
+					pricingDetails.style.display = value ? '' : 'none';
 				}));
+
+		// Pricing table (collapsible, only visible when token usage toggle is ON)
+		const pricingDetails = tokenTogglePricingContainer.createEl('details', { cls: 'ai-settings-collapsible ai-pricing-table-wrapper' });
+		pricingDetails.style.display = this.plugin.settings.showTokenUsage ? '' : 'none';
+		const pricingSummary = pricingDetails.createEl('summary');
+		pricingSummary.setText('Model Pricing ($/1M tokens)');
+
+		const pricingContent = pricingDetails.createDiv({ cls: 'ai-settings-collapsible-content' });
+
+		const buildPricingTable = () => {
+			pricingContent.empty();
+
+			const table = pricingContent.createEl('table', { cls: 'ai-pricing-table' });
+			const thead = table.createEl('thead');
+			const headerRow = thead.createEl('tr');
+			headerRow.createEl('th', { text: 'Model' });
+			headerRow.createEl('th', { text: 'Input' });
+			headerRow.createEl('th', { text: 'Output' });
+
+			const tbody = table.createEl('tbody');
+			const overrides = this.plugin.settings.customModelPricing;
+
+			for (const [model, defaults] of Object.entries(MODEL_PRICING)) {
+				const row = tbody.createEl('tr');
+				row.createEl('td', { text: model, cls: 'ai-pricing-model-name' });
+
+				const inputTd = row.createEl('td');
+				const inputEl = inputTd.createEl('input', { type: 'number', cls: 'ai-pricing-input' }) as HTMLInputElement;
+				inputEl.value = String(overrides[model]?.input ?? defaults.input);
+				inputEl.step = '0.01';
+				inputEl.min = '0';
+				inputEl.addEventListener('change', async () => {
+					const val = parseFloat(inputEl.value);
+					if (isNaN(val) || val < 0) { inputEl.value = String(defaults.input); return; }
+					if (val === defaults.input && (!overrides[model] || overrides[model].output === defaults.output)) {
+						delete overrides[model];
+					} else {
+						overrides[model] = { input: val, output: overrides[model]?.output ?? defaults.output };
+					}
+					await this.plugin.saveSettings();
+				});
+
+				const outputTd = row.createEl('td');
+				const outputEl = outputTd.createEl('input', { type: 'number', cls: 'ai-pricing-input' }) as HTMLInputElement;
+				outputEl.value = String(overrides[model]?.output ?? defaults.output);
+				outputEl.step = '0.01';
+				outputEl.min = '0';
+				outputEl.addEventListener('change', async () => {
+					const val = parseFloat(outputEl.value);
+					if (isNaN(val) || val < 0) { outputEl.value = String(defaults.output); return; }
+					if (val === defaults.output && (!overrides[model] || overrides[model].input === defaults.input)) {
+						delete overrides[model];
+					} else {
+						overrides[model] = { input: overrides[model]?.input ?? defaults.input, output: val };
+					}
+					await this.plugin.saveSettings();
+				});
+			}
+
+			const resetBtn = pricingContent.createEl('button', { text: 'Reset to defaults', cls: 'ai-pricing-reset-btn' });
+			resetBtn.addEventListener('click', async () => {
+				this.plugin.settings.customModelPricing = {};
+				await this.plugin.saveSettings();
+				buildPricingTable();
+			});
+		};
+
+		buildPricingTable();
 
 		// ============================================
 		// SECTION 6: Agent Settings (Collapsible)
@@ -4337,30 +4641,6 @@ class AIAssistantSettingTab extends PluginSettingTab {
 		agentSummary.setText('Agent');
 
 		const agentContent = agentEl.createDiv({ cls: 'ai-settings-collapsible-content' });
-
-		new Setting(agentContent)
-			.setName('Max Iterations')
-			.setDesc('Maximum think-act-observe rounds the agent can take (5-20)')
-			.addSlider(slider => slider
-				.setLimits(5, 20, 1)
-				.setValue(this.plugin.settings.agentMaxIterations)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.agentMaxIterations = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(agentContent)
-			.setName('Total Token Budget')
-			.setDesc('Maximum total tokens across all rounds (20000-500000)')
-			.addSlider(slider => slider
-				.setLimits(20000, 500000, 10000)
-				.setValue(this.plugin.settings.agentMaxTokens)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.agentMaxTokens = value;
-					await this.plugin.saveSettings();
-				}));
 
 		// 6b-ii: Tool Toggles (all tools including advanced, in pill groups)
 		this.toolToggleWrapper = agentContent.createDiv({ cls: 'ai-tool-toggles' });

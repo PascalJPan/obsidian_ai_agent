@@ -223,7 +223,7 @@ export const TOOL_SEARCH_AND_REPLACE: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'search_and_replace',
-		description: 'Find and replace text across notes. Each replacement creates a pending edit. Max 50 replacements per call.',
+		description: 'Find and replace text across notes. Each replacement creates a pending edit. Max 50 replacements per call. IMPORTANT: Before replacing, consider the surrounding context — avoid breaking Markdown links ([[...]]), URLs, code blocks, frontmatter fields, or other structured syntax. If the search term appears inside such structures, adjust the replacement to preserve them.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -461,7 +461,7 @@ export async function handleActionToolCall(
 				const { from_path, to_path } = moveList[0];
 				const result = await callbacks.moveNote(from_path, to_path);
 				if (result.success) {
-					return { result: `Moved "${from_path}" → "${result.newPath || to_path}". All wikilinks updated.` };
+					return { result: `Moved "${from_path}" → "${result.newPath || to_path}". All wikilinks updated. The user can review and undo this move.` };
 				} else {
 					return { result: `Failed to move note: ${result.error}` };
 				}
@@ -478,7 +478,7 @@ export async function handleActionToolCall(
 				}
 			}
 			const parts: string[] = [];
-			parts.push(`Moved ${successes.length}/${moveList.length} notes.`);
+			parts.push(`Moved ${successes.length}/${moveList.length} notes. The user can review and undo each move.`);
 			if (successes.length > 0) parts.push('Succeeded:\n' + successes.map(s => `  ${s}`).join('\n'));
 			if (failures.length > 0) parts.push('Failed:\n' + failures.map(f => `  ${f}`).join('\n'));
 			return { result: parts.join('\n') };
@@ -489,7 +489,7 @@ export async function handleActionToolCall(
 			const properties = args.properties as Record<string, unknown>;
 			const result = await callbacks.updateProperties(path, properties);
 			if (result.success) {
-				return { result: `Updated properties of "${path}": ${Object.keys(properties).join(', ')}` };
+				return { result: `Updated properties of "${path}": ${Object.keys(properties).join(', ')}. The user can review and undo these changes.` };
 			} else {
 				return { result: `Failed to update properties: ${result.error}` };
 			}
@@ -500,7 +500,7 @@ export async function handleActionToolCall(
 			const tags = args.tags as string[];
 			const result = await callbacks.addTags(path, tags);
 			if (result.success) {
-				return { result: `Added tags to "${path}": ${tags.join(', ')}` };
+				return { result: `Added tags to "${path}": ${tags.join(', ')}. The user can review and undo these tags.` };
 			} else {
 				return { result: `Failed to add tags: ${result.error}` };
 			}
@@ -512,7 +512,7 @@ export async function handleActionToolCall(
 			const context = args.context as string | undefined;
 			const result = await callbacks.linkNotes(source, target, context);
 			if (result.success) {
-				return { result: `Added link [[${target.replace('.md', '')}]] to "${source}"${context ? ` at "${context}"` : ''}.` };
+				return { result: `Proposed link [[${target.replace('.md', '')}]] in "${source}"${context ? ` at "${context}"` : ''}. The user will see a pending edit to accept or reject.` };
 			} else {
 				return { result: `Failed to link notes: ${result.error}` };
 			}
