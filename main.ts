@@ -3137,6 +3137,21 @@ class AIAssistantView extends ItemView {
 						view.capabilities,
 						view.contextScopeConfig
 					);
+				} else {
+					// No active file: reject edits under 'current' scope, still check capabilities under 'vault'
+					if (view.editableScope === 'current') {
+						validated[0].error = 'No active file open — cannot edit in "current note" scope. Open a note or switch to "vault" scope.';
+					} else {
+						// Check capabilities even without an active file
+						const pos = validated[0].instruction.position;
+						if (validated[0].isNewFile && !view.capabilities.canCreate) {
+							validated[0].error = 'Creating new files is not allowed. The user can enable "Can Create" in Settings → Edit Rules.';
+						} else if ((pos.startsWith('delete:') || pos.startsWith('replace:')) && !view.capabilities.canDelete) {
+							validated[0].error = 'Deleting/replacing content is not allowed. The user can enable "Can Delete" in Settings → Edit Rules.';
+						} else if ((pos === 'start' || pos === 'end' || pos.startsWith('after:') || pos.startsWith('insert:')) && !view.capabilities.canAdd) {
+							validated[0].error = 'Adding content is not allowed. The user can enable "Can Add" in Settings → Edit Rules.';
+						}
+					}
 				}
 
 				if (validated[0]?.error) {
@@ -3595,36 +3610,45 @@ ${recent || 'none'}`;
 						const content = stripPendingEditBlocks(raw, plugin.settings.pendingEditTag);
 						const lines = content.split('\n');
 
+						// Collect matching line indices first
+						const matchingLines: number[] = [];
 						for (let i = 0; i < lines.length; i++) {
-							if (matchCount >= MAX_REPLACEMENTS) break;
+							if (matchCount + matchingLines.length >= MAX_REPLACEMENTS) break;
 							pattern.lastIndex = 0;
 							if (pattern.test(lines[i])) {
-								pattern.lastIndex = 0;
-								const newLine = lines[i].replace(pattern, replace);
-								const lineNum = i + 1;
-								const edit: EditInstruction = {
-									file: file.path,
-									position: `replace:${lineNum}`,
-									content: newLine
-								};
-								// Inline proposeEdit logic: validate, filter, insert
-								const validated = await plugin.validateEdits([edit]);
-								if (validated[0]?.error) {
-									errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
-									continue;
-								}
-								if (activeFileAtStart) {
-									plugin.filterEditsByRulesWithConfig(validated, activeFileAtStart, view.editableScope, view.capabilities, view.contextScopeConfig);
-								}
-								if (validated[0]?.error) {
-									errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
-									continue;
-								}
-								const result = await plugin.insertEditBlocks(validated);
-								if (result.success > 0) {
-									matchCount++;
-									filesMatched.add(file.path);
-								}
+								matchingLines.push(i);
+							}
+						}
+
+						// Process in reverse order (bottom-to-top) so edit block insertions
+						// don't shift line numbers for subsequent matches
+						for (let j = matchingLines.length - 1; j >= 0; j--) {
+							if (matchCount >= MAX_REPLACEMENTS) break;
+							const i = matchingLines[j];
+							pattern.lastIndex = 0;
+							const newLine = lines[i].replace(pattern, replace);
+							const lineNum = i + 1;
+							const edit: EditInstruction = {
+								file: file.path,
+								position: `replace:${lineNum}`,
+								content: newLine
+							};
+							const validated = await plugin.validateEdits([edit]);
+							if (validated[0]?.error) {
+								errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
+								continue;
+							}
+							if (activeFileAtStart) {
+								plugin.filterEditsByRulesWithConfig(validated, activeFileAtStart, view.editableScope, view.capabilities, view.contextScopeConfig);
+							}
+							if (validated[0]?.error) {
+								errors.push(`${file.path}:${lineNum}: ${validated[0].error}`);
+								continue;
+							}
+							const result = await plugin.insertEditBlocks(validated);
+							if (result.success > 0) {
+								matchCount++;
+								filesMatched.add(file.path);
 							}
 						}
 					} catch (e) {
@@ -4381,7 +4405,11 @@ ${recent || 'none'}`;
 
 
 	async onClose() {
-		// Cleanup
+		if (this.agentAbortController) {
+			this.agentAbortController.abort();
+			this.agentAbortController = null;
+		}
+		this.setLoading(false);
 	}
 }
 
@@ -5246,16 +5274,22 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			preview_pending_edits: 'Preview Edits',
 			find_orphan_notes: 'Orphan Notes',
 			find_unlinked_mentions: 'Unlinked Mentions',
+			get_vault_stats: 'Vault Stats',
+			get_chat_history: 'Chat History',
+			append_to_note: 'Append to Note',
+			search_and_replace: 'Search & Replace',
 		};
 
 		const vaultTools = [
 			'search_vault', 'read_note', 'list_notes', 'get_links',
-			'explore_structure', 'list_tags', 'get_manual_context', 'get_selection'
+			'explore_structure', 'list_tags', 'get_manual_context', 'get_selection',
+			'get_vault_stats', 'get_chat_history'
 		];
 		const webToolNames = ['web_search', 'read_webpage'];
 		const actionTools = [
 			'edit_note', 'create_note', 'open_note', 'move_note',
 			'update_properties', 'add_tags', 'link_notes', 'copy_notes',
+			'append_to_note', 'search_and_replace',
 			'done', 'ask_user'
 		];
 		const advancedTools = [

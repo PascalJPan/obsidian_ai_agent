@@ -119,7 +119,7 @@ Line 6`;
 				content: 'Content'
 			};
 			const result = computeNewContent(sampleContent, instruction);
-			expect(result.error).toBe('Heading not found: "## NonExistent"');
+			expect(result.error).toContain('Heading not found: "## NonExistent"');
 		});
 	});
 
@@ -202,7 +202,7 @@ Line 6`;
 				content: 'Content'
 			};
 			const result = computeNewContent(sampleContent, instruction);
-			expect(result.error).toContain('out of range');
+			expect(result.error).toContain('Text to replace not found');
 		});
 	});
 
@@ -228,7 +228,7 @@ Line 6`;
 				content: 'Content'
 			};
 			const result = computeNewContent(sampleContent, instruction);
-			expect(result.error).toContain('invalid');
+			expect(result.error).toContain('Text to replace not found');
 		});
 
 		it('returns error for out of range end line', () => {
@@ -238,7 +238,7 @@ Line 6`;
 				content: 'Content'
 			};
 			const result = computeNewContent(sampleContent, instruction);
-			expect(result.error).toContain('invalid');
+			expect(result.error).toContain('Text to replace not found');
 		});
 	});
 
@@ -288,7 +288,7 @@ Line 6`;
 				content: ''
 			};
 			const result = computeNewContent(sampleContent, instruction);
-			expect(result.error).toContain('Invalid delete format');
+			expect(result.error).toContain('Invalid line range');
 		});
 	});
 

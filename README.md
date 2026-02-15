@@ -147,7 +147,7 @@ Build your knowledge base with an assistant that respects your agency.
 The plugin uses a modular architecture:
 
 ```
-main.ts              - Entry point, plugin lifecycle, UI, callbacks (~4,500 lines)
+main.ts              - Entry point, plugin lifecycle, UI, callbacks (~5,800 lines)
 src/
   types.ts           - Shared type definitions
   ai/
@@ -184,3 +184,19 @@ See `CLAUDE.md` for detailed developer documentation.
 ---
 
 *Currently in active development. Contributions and feedback welcome.*
+
+## Privacy & Disclaimer
+
+- **API communication**: Note content included in context is sent to OpenAI's API for processing. Only the notes you configure (via context scope, manual selection, or agent tool calls) are transmitted.
+- **API key storage**: Your API key is stored locally in Obsidian's plugin data folder and is only sent to OpenAI's API — nowhere else.
+- **Costs**: You are responsible for your own OpenAI API usage and associated costs.
+- **No guarantees**: All AI-proposed edits require your explicit review and approval. The plugin is provided "as is" under the MIT license — the author is not liable for data loss or unintended modifications. Back up your vault regularly.
+
+## Installation
+
+1. Download the latest release (`main.js`, `manifest.json`, `styles.css`) from the [GitHub releases page](https://github.com/PascalJPan/obsidian_ai_agent/releases)
+2. In your vault, navigate to `.obsidian/plugins/` and create a folder called `obsidian-agent`
+3. Copy the three downloaded files into that folder
+4. Open Obsidian → **Settings → Community plugins** → enable **ObsidianAgent**
+5. Go to the ObsidianAgent settings tab and enter your OpenAI API key
+6. Click the brain icon in the left ribbon to open the chat panel
