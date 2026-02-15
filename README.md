@@ -1,4 +1,4 @@
-# ObsidianAgent
+# Vault Agent
 
 An agentic AI assistant for Obsidian that helps you build and maintain your second brain.
 
@@ -15,7 +15,7 @@ Think of it as a collaborator that:
 
 ## How It Works
 
-ObsidianAgent runs a single unified agent with a **ReAct loop** (Think → Act → Observe). Instead of a rigid pipeline, one agent autonomously decides what to do at each step—exploring your vault, searching the web, and taking actions—all in one adaptive loop. 
+Vault Agent runs a single unified agent with a **ReAct loop** (Think → Act → Observe). Instead of a rigid pipeline, one agent autonomously decides what to do at each step—exploring your vault, searching the web, and taking actions—all in one adaptive loop. 
 
 The agent has **35 built-in tools** across 3 categories, plus user-defined **Custom Info Tools**:
 
@@ -131,7 +131,7 @@ If you prefer to choose context yourself, you can configure it manually:
 1. Install the plugin
 2. Add your OpenAI API key in settings
 3. (Optional) Choose your preferred AI model
-4. Open the ObsidianAgent panel (brain icon in the ribbon)
+4. Open the Vault Agent panel (brain icon in the ribbon)
 5. Start asking questions or requesting edits
 
 The AI proposes changes as pending edit blocks inline in your notes. Review each one and click Accept or Reject. You stay in control.
@@ -197,6 +197,6 @@ See `CLAUDE.md` for detailed developer documentation.
 1. Download the latest release (`main.js`, `manifest.json`, `styles.css`) from the [GitHub releases page](https://github.com/PascalJPan/obsidian_ai_agent/releases)
 2. In your vault, navigate to `.obsidian/plugins/` and create a folder called `obsidian-agent`
 3. Copy the three downloaded files into that folder
-4. Open Obsidian → **Settings → Community plugins** → enable **ObsidianAgent**
-5. Go to the ObsidianAgent settings tab and enter your OpenAI API key
+4. Open Obsidian → **Settings → Community plugins** → enable **Vault Agent**
+5. Go to the Vault Agent settings tab and enter your OpenAI API key
 6. Click the brain icon in the left ribbon to open the chat panel

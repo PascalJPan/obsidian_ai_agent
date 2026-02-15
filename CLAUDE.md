@@ -1,4 +1,4 @@
-# ObsidianAgent - Developer Reference
+# Vault Agent - Developer Reference
 
 ## TODO
 - [ ] **Saved context presets** — save/load context selection profiles
