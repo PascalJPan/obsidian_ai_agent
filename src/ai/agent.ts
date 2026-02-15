@@ -281,6 +281,17 @@ export async function runAgent(
 					// Don't skip — still execute the call, just warn
 				}
 
+				// Validate required arguments for known tools
+				const missingArg = validateRequiredArgs(fnName, fnArgs);
+				if (missingArg) {
+					messages.push({
+						role: 'tool',
+						tool_call_id: toolCall.id,
+						content: `Error: Missing required argument "${missingArg}" for tool "${fnName}".`
+					});
+					continue;
+				}
+
 				// Guard: reject disabled tools the API may hallucinate
 				if (disabledSet.has(fnName)) {
 					messages.push({
@@ -435,6 +446,37 @@ export async function runAgent(
 	});
 
 	return buildResult(true, summary, editsProposed, actionState, totalTokens, totalPromptTokens, totalCompletionTokens, totalCachedTokens, tokenPerRound, tokenPerRound.length);
+}
+
+// Required arguments for known tools — used for early validation
+const REQUIRED_ARGS: Record<string, string[]> = {
+	read_note: ['path'],
+	edit_note: ['file', 'position', 'content'],
+	create_note: ['path', 'content'],
+	move_note: ['from', 'to'],
+	search_vault: ['query'],
+	open_note: ['path'],
+	delete_note: ['path'],
+	append_to_note: ['path', 'content'],
+	search_and_replace: ['search', 'replace'],
+	update_properties: ['path', 'properties'],
+	add_tags: ['path', 'tags'],
+	link_notes: ['source', 'target'],
+	copy_notes: ['paths'],
+	web_search: ['query'],
+	read_webpage: ['url'],
+	done: ['summary'],
+	ask_user: ['question'],
+	execute_command: ['command_id'],
+};
+
+function validateRequiredArgs(toolName: string, args: Record<string, unknown>): string | null {
+	const required = REQUIRED_ARGS[toolName];
+	if (!required) return null;
+	for (const key of required) {
+		if (args[key] === undefined || args[key] === null) return key;
+	}
+	return null;
 }
 
 // Helper: build result object

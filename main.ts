@@ -1930,10 +1930,8 @@ class AIAssistantView extends ItemView {
 
 	// Handle stop button click
 	handleStop() {
-		if (this.agentAbortController) {
-			this.agentAbortController.abort();
-			this.agentAbortController = null;
-		}
+		this.agentAbortController?.abort();
+		// Don't null here — let finally block handle cleanup
 	}
 
 	// Render the list of manually added notes

@@ -623,13 +623,16 @@ export async function handleActionToolCall(
 		case 'ask_user': {
 			const question = args.question as string;
 			const choices = args.choices as string[] | undefined;
-			const ASK_USER_TIMEOUT_MS = 120_000;
+			const ASK_USER_TIMEOUT_MS = 300_000; // 5 minutes
+			let timeoutId: ReturnType<typeof setTimeout>;
+			const timeoutPromise = new Promise<string>(resolve => {
+				timeoutId = setTimeout(() => resolve('[User did not respond within 5 minutes]'), ASK_USER_TIMEOUT_MS);
+			});
 			const userAnswer = await Promise.race([
 				callbacks.askUser(question, choices),
-				new Promise<string>(resolve =>
-					setTimeout(() => resolve('[User did not respond within 2 minutes]'), ASK_USER_TIMEOUT_MS)
-				)
+				timeoutPromise
 			]);
+			clearTimeout(timeoutId!);
 			return { result: `User answered: "${userAnswer}"` };
 		}
 
