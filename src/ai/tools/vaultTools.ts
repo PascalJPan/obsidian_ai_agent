@@ -76,16 +76,20 @@ export const TOOL_READ_NOTE: OpenAITool = {
 	type: 'function',
 	function: {
 		name: 'read_note',
-		description: 'Read the full content of a note with line numbers. Supports fuzzy path matching (e.g., "My Note" matches "Projects/My Note.md").',
+		description: 'Read the full content of one or more notes with line numbers. Supports fuzzy path matching. Use "paths" array to batch-read multiple notes in one call (saves rounds).',
 		parameters: {
 			type: 'object',
 			properties: {
 				path: {
 					type: 'string',
-					description: 'Path or name of the note (e.g., "Projects/My Note.md" or "My Note")'
+					description: 'Single note path or name (e.g., "Projects/My Note.md" or "My Note")'
+				},
+				paths: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Multiple note paths to read in one call (batch mode). Cannot be used with "path".'
 				}
-			},
-			required: ['path']
+			}
 		}
 	}
 };
@@ -520,15 +524,50 @@ export async function handleVaultToolCall(
 		}
 
 		case 'read_note': {
-			const path = args.path as string;
-			const result = await callbacks.readNote(path);
-			if (!result) {
-				return `Note not found: "${path}". Try search_vault to find the correct path.`;
+			const singlePath = args.path as string | undefined;
+			const batchPaths = args.paths as string[] | undefined;
+
+			// Validate: need exactly one of path or paths
+			if (singlePath && batchPaths) {
+				return 'Error: Provide either "path" (single note) or "paths" (batch), not both.';
 			}
-			if (result.excluded) {
-				return `Note "${path}" is in an excluded folder and cannot be accessed.`;
+			if (!singlePath && (!batchPaths || batchPaths.length === 0)) {
+				return 'Error: Provide "path" (single note) or "paths" (array of note paths).';
 			}
-			return `=== ${result.path} (${result.lineCount} lines) ===\n${result.content}`;
+
+			// Single note — existing behavior
+			if (singlePath) {
+				const result = await callbacks.readNote(singlePath);
+				if (!result) {
+					return `Note not found: "${singlePath}". Try search_vault to find the correct path.`;
+				}
+				if (result.excluded) {
+					return `Note "${singlePath}" is in an excluded folder and cannot be accessed.`;
+				}
+				return `=== ${result.path} (${result.lineCount} lines) ===\n${result.content}`;
+			}
+
+			// Batch mode
+			const results: string[] = [];
+			const errors: string[] = [];
+			for (const p of batchPaths!) {
+				try {
+					const result = await callbacks.readNote(p);
+					if (!result) {
+						errors.push(`"${p}": not found`);
+					} else if (result.excluded) {
+						errors.push(`"${p}": excluded folder`);
+					} else {
+						results.push(`=== ${result.path} (${result.lineCount} lines) ===\n${result.content}`);
+					}
+				} catch (e) {
+					errors.push(`"${p}": ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
+			const output: string[] = [];
+			if (results.length > 0) output.push(results.join('\n---\n'));
+			if (errors.length > 0) output.push(`ERRORS:\n${errors.join('\n')}`);
+			return output.join('\n---\n') || 'No notes could be read.';
 		}
 
 		case 'list_notes': {

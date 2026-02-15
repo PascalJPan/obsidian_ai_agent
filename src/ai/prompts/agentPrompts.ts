@@ -50,6 +50,7 @@ When you have enough information, call done() immediately. Don't over-explore.
 
 GUIDELINES:
 - Always read a note before editing it to get current line numbers.
+- Use batch parameters when acting on multiple notes: read_note(paths), open_note(paths), move_note(moves). One call instead of one per note.
 - For multi-edit tasks, plan your changes before executing.
 - When a tool fails, try a different approach rather than retrying the same call.
 - Consider what the user actually wants, not just their literal words.

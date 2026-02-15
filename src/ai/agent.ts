@@ -319,10 +319,14 @@ export async function runAgent(
 					// Vault tools
 					toolResult = await handleVaultToolCall(fnName, fnArgs, callbacks);
 					// Track read notes
-					if (fnName === 'read_note' && fnArgs.path) {
-						const path = fnArgs.path as string;
-						if (!actionState.notesRead.includes(path)) {
-							actionState.notesRead.push(path);
+					if (fnName === 'read_note') {
+						const pathsToTrack: string[] = [];
+						if (fnArgs.path) pathsToTrack.push(fnArgs.path as string);
+						if (Array.isArray(fnArgs.paths)) pathsToTrack.push(...(fnArgs.paths as string[]));
+						for (const p of pathsToTrack) {
+							if (!actionState.notesRead.includes(p)) {
+								actionState.notesRead.push(p);
+							}
 						}
 					}
 				} else if (webToolNames.has(fnName)) {
@@ -450,12 +454,12 @@ export async function runAgent(
 
 // Required arguments for known tools — used for early validation
 const REQUIRED_ARGS: Record<string, string[]> = {
-	read_note: ['path'],
+	// read_note: validated in handler (path XOR paths)
 	edit_note: ['file', 'position', 'content'],
 	create_note: ['path', 'content'],
-	move_note: ['from', 'to'],
+	// move_note: validated in handler (from/to XOR moves)
+	// open_note: validated in handler (path XOR paths)
 	search_vault: ['query'],
-	open_note: ['path'],
 	delete_note: ['path'],
 	append_to_note: ['path', 'content'],
 	search_and_replace: ['search', 'replace'],
