@@ -194,7 +194,7 @@ See `CLAUDE.md` for detailed developer documentation.
 
 ## Installation
 
-1. Download the latest release (`main.js`, `manifest.json`, `styles.css`) from the [GitHub releases page](https://github.com/PascalJPan/obsidian_ai_agent/releases)
+1. Download the latest release (`main.js`, `manifest.json`, `styles.css`) from the [GitHub releases page](https://github.com/PascalJPan/Obsidian-Vault-AI-Agent/releases)
 2. In your vault, navigate to `.obsidian/plugins/` and create a folder called `obsidian-agent`
 3. Copy the three downloaded files into that folder
 4. Open Obsidian → **Settings → Community plugins** → enable **Vault Agent**
