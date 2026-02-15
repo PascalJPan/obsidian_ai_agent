@@ -176,7 +176,7 @@ export interface ChatMessage {
 }
 
 // Web search types (used by unified agent)
-export type SearchApiType = 'openai' | 'serper' | 'brave' | 'tavily';
+export type SearchApiType = 'openai' | 'serper' | 'brave' | 'tavily'; // brave/tavily kept for backward compat, removed from UI
 
 export interface WebSource {
 	url: string;

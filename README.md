@@ -41,7 +41,7 @@ The agent has **35 built-in tools** across 3 categories, plus user-defined **Cus
 - `find_unlinked_mentions` — find text mentions that could be wikilinks
 
 **Web Tools (2)** — search beyond your vault
-- `web_search` — search the internet (OpenAI, Serper, Brave, or Tavily)
+- `web_search` — search the internet (OpenAI or Serper)
 - `read_webpage` — fetch and extract content from a URL
 
 **Action Tools (14)** — make changes and interact
@@ -163,7 +163,7 @@ src/
       index.ts        - Barrel file, shared constants
     context.ts       - Context utilities
     validation.ts    - Edit validation
-    searchApi.ts     - Web search wrapper (OpenAI, Serper, Brave, Tavily)
+    searchApi.ts     - Web search wrapper (OpenAI, Serper)
     semantic.ts      - Embedding generation and semantic search
     pricing.ts       - Token usage formatting
   edits/

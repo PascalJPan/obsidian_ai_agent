@@ -102,7 +102,7 @@ interface MyPluginSettings {
 	agentMaxIterations: number;     // 5-20, max ReAct loop rounds
 	agentMaxTokens: number;         // Total token budget across all rounds
 	// Web search settings
-	webAgentSearchApi: SearchApiType;      // 'openai' | 'serper' | 'brave' | 'tavily'
+	webAgentSearchApi: SearchApiType;      // 'openai' | 'serper'
 	webAgentSearchApiKey: string;          // API key for search service
 	webAgentSnippetLimit: number;          // Max search results (default: 8)
 	webAgentFetchLimit: number;            // Max pages to fetch in full (default: 3)
@@ -142,7 +142,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	customModelPricing: {},
 	embeddingModel: 'text-embedding-3-small',
 	// Agent settings
-	agentMaxIterations: 10,
+	agentMaxIterations: 20,
 	agentMaxTokens: 100000,
 	// Web search settings
 	webAgentSearchApi: 'openai',
@@ -4469,10 +4469,6 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.addOption('gpt-4.1', 'gpt-4.1')
 				.addOption('gpt-4o-mini', 'gpt-4o-mini')
 				.addOption('gpt-4o', 'gpt-4o')
-				.addOption('o1-mini', 'o1-mini')
-				.addOption('o1', 'o1')
-				.addOption('o3-mini', 'o3-mini')
-				.addOption('o3', 'o3')
 				.addOption('o4-mini', 'o4-mini')
 				.setValue(this.plugin.settings.aiModel)
 				.onChange(async (value) => {
@@ -4512,8 +4508,6 @@ class AIAssistantSettingTab extends PluginSettingTab {
 			.addDropdown(dropdown => dropdown
 				.addOption('openai', 'OpenAI Web Search (uses main API key)')
 				.addOption('serper', 'Serper.dev (~$0.001/search)')
-				.addOption('brave', 'Brave Search')
-				.addOption('tavily', 'Tavily')
 				.setValue(this.plugin.settings.webAgentSearchApi)
 				.onChange(async (value) => {
 					this.plugin.settings.webAgentSearchApi = value as SearchApiType;
@@ -5049,6 +5043,23 @@ class AIAssistantSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.debugMode = value;
 					await this.plugin.saveSettings();
+				}));
+
+		// Reset Plugin
+		new Setting(containerEl)
+			.setName('Reset Plugin')
+			.setDesc('Reset all settings to defaults. Your embedding index will be preserved.')
+			.addButton(button => button
+				.setButtonText('Reset')
+				.setWarning()
+				.onClick(async () => {
+					if (!confirm('Are you sure you want to reset all settings to defaults? This cannot be undone. Your embedding index will be preserved.')) {
+						return;
+					}
+					this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS);
+					await this.plugin.saveSettings();
+					this.display();
+					new Notice('All settings have been reset to defaults.');
 				}));
 	}
 
